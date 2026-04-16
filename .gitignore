@@ -30,3 +30,17 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# staxv-hypervisor specific
+staxv-hypervisor
+staxv-hypervisor.exe
+config.toml
+secrets.json
+secrets.json.tmp
+*.db
+*.db-shm
+*.db-wal
+frontend/node_modules/
+frontend/dist/
+static/
+.env
