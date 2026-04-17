@@ -1,106 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
   <defs>
-
-    <!-- Base gem gradient -->
-    <linearGradient id="gBase" x1="25%" y1="95%" x2="75%" y2="5%">
-      <stop offset="0%"   stop-color="#020916"/>
-      <stop offset="50%"  stop-color="#07163d"/>
-      <stop offset="100%" stop-color="#0e2260"/>
+    <linearGradient id="gSV" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#ffffff"/>
+      <stop offset="55%"  stop-color="#e0f2fe"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
     </linearGradient>
-
-    <!-- Right lit facet — deep blue → sky -->
-    <linearGradient id="gFacetA" x1="0%" y1="100%" x2="100%" y2="0%">
-      <stop offset="0%"   stop-color="#1540b8"/>
-      <stop offset="45%"  stop-color="#2060e8"/>
-      <stop offset="80%"  stop-color="#36a0f0"/>
-      <stop offset="100%" stop-color="#7dd3fc"/>
-    </linearGradient>
-
-    <!-- Left facet — indigo → violet -->
-    <linearGradient id="gFacetB" x1="100%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%"   stop-color="#312e91"/>
-      <stop offset="55%"  stop-color="#4f46e5"/>
-      <stop offset="100%" stop-color="#7c3aed"/>
-    </linearGradient>
-
-    <!-- Specular bloom -->
-    <radialGradient id="gBloom" cx="68%" cy="20%" r="50%">
-      <stop offset="0%"   stop-color="#dbeafe" stop-opacity="0.50"/>
-      <stop offset="55%"  stop-color="#93c5fd" stop-opacity="0.12"/>
-      <stop offset="100%" stop-color="#93c5fd" stop-opacity="0"/>
-    </radialGradient>
-
-    <!-- Ridge shimmer -->
-    <linearGradient id="gRidge" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%"   stop-color="#bae6fd" stop-opacity="0.90"/>
-      <stop offset="55%"  stop-color="#60a5fa" stop-opacity="0.40"/>
-      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
-    </linearGradient>
-
-    <!-- SV text gradient — bright top, solid blue bottom -->
-    <linearGradient id="gText" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%"   stop-color="#ffffff" stop-opacity="1"/>
-      <stop offset="45%"  stop-color="#e0f2fe" stop-opacity="0.97"/>
-      <stop offset="100%" stop-color="#7dd3fc" stop-opacity="0.85"/>
-    </linearGradient>
-
-    <!-- Text glow filter -->
-    <filter id="fTextGlow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="4" result="blur"/>
+    <filter id="fGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3" result="b"/>
       <feFlood flood-color="#38bdf8" flood-opacity="0.55" result="c"/>
-      <feComposite in="c" in2="blur" operator="in" result="glow"/>
+      <feComposite in="c" in2="b" operator="in" result="g"/>
       <feMerge>
-        <feMergeNode in="glow"/>
+        <feMergeNode in="g"/>
         <feMergeNode in="SourceGraphic"/>
       </feMerge>
     </filter>
-
-    <!-- Outer gem glow -->
-    <filter id="fGemGlow" x="-15%" y="-15%" width="130%" height="130%">
-      <feGaussianBlur in="SourceAlpha" stdDeviation="5" result="blur"/>
-      <feFlood flood-color="#1d4ed8" flood-opacity="0.40" result="c"/>
-      <feComposite in="c" in2="blur" operator="in" result="glow"/>
-      <feMerge>
-        <feMergeNode in="glow"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-
-    <clipPath id="cGem">
-      <path d="M100 16 C127 14,158 29,172 56 C183 79,184 108,175 134 C166 160,146 177,122 184 C111 188,89 188,78 184 C54 177,34 160,25 134 C16 108,17 79,28 56 C42 29,73 14,100 16Z"/>
-    </clipPath>
-
   </defs>
-
-  <!-- ── Gem base ──────────────────────────────────────────────────────── -->
-  <path d="M100 16 C127 14,158 29,172 56 C183 79,184 108,175 134 C166 160,146 177,122 184 C111 188,89 188,78 184 C54 177,34 160,25 134 C16 108,17 79,28 56 C42 29,73 14,100 16Z"
-    fill="url(#gBase)" filter="url(#fGemGlow)"/>
-
-  <!-- ── Right lit facet ───────────────────────────────────────────────── -->
-  <path d="M100 16 C127 14,158 29,172 56 C183 79,184 108,175 134 C160 156,140 172,118 181 L100 108Z"
-    fill="url(#gFacetA)" clip-path="url(#cGem)" opacity="0.90"/>
-
-  <!-- ── Left indigo facet ─────────────────────────────────────────────── -->
-  <path d="M100 16 C73 14,42 29,28 56 C17 79,16 108,25 134 C40 156,60 172,82 181 L100 108Z"
-    fill="url(#gFacetB)" clip-path="url(#cGem)" opacity="0.76"/>
-
-  <!-- ── Specular bloom ────────────────────────────────────────────────── -->
-  <path d="M100 16 C127 14,158 29,172 56 C183 79,184 108,175 134 C166 160,146 177,122 184 C111 188,89 188,78 184 C54 177,34 160,25 134 C16 108,17 79,28 56 C42 29,73 14,100 16Z"
-    fill="url(#gBloom)" clip-path="url(#cGem)"/>
-
-  <!-- ── Ridge line ────────────────────────────────────────────────────── -->
-  <line x1="100" y1="17" x2="100" y2="108"
-    stroke="url(#gRidge)" stroke-width="1.4" stroke-linecap="round"/>
-
-  <!-- ── SV monogram ───────────────────────────────────────────────────── -->
-  <text
-    x="100" y="121"
-    font-family="'Arial Black','Helvetica Neue',Arial,sans-serif"
-    font-weight="900"
-    font-size="68"
-    letter-spacing="-3"
-    text-anchor="middle"
-    fill="url(#gText)"
-    filter="url(#fTextGlow)">SV</text>
-
+  <g fill="url(#gSV)" filter="url(#fGlow)">
+    <polygon points="22,42 88,42 72,98 48,98"/>
+    <polygon points="112,42 178,42 152,98 128,98"/>
+    <polygon points="36,108 82,108 68,150 48,150"/>
+    <polygon points="118,108 164,108 152,150 132,150"/>
+    <polygon points="55,160 145,160 100,196"/>
+  </g>
 </svg>

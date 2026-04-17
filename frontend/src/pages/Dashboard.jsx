@@ -116,13 +116,21 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-bold text-slate-100">System Dashboard</h2>
+      {/* Brand header */}
+      <div className="flex items-center justify-between bg-navy-700 border border-navy-400 rounded-xl px-6 py-5">
+        <div className="flex items-center gap-4">
+          <img src="/logo.svg" alt="StaxV" className="w-14 h-14 drop-shadow-lg" />
+          <div className="flex flex-col leading-none">
+            <span className="text-sky-400 font-bold text-3xl tracking-tight">StaxV</span>
+            <span className="text-slate-400 text-[11px] font-semibold tracking-[0.25em] uppercase mt-1">Hypervisor</span>
+          </div>
+        </div>
         <button onClick={fetchAll} className="flex items-center gap-2 bg-navy-600 hover:bg-navy-500 border border-navy-400 text-slate-300 px-3 py-2 rounded-md text-sm transition-colors">
           <RefreshCw size={13} /> Refresh
         </button>
       </div>
+
+      <h2 className="text-xl font-bold text-slate-100">System Dashboard</h2>
 
       {/* Alerts bar */}
       {(failedSvc > 0 || secUpdates > 0 || !ufwOn) && (

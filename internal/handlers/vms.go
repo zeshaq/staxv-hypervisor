@@ -22,6 +22,8 @@ type LibvirtClient interface {
 	ShutdownDomain(uuid string) error
 	ForceStopDomain(uuid string) error
 	RebootDomain(uuid string) error
+	DeleteDomain(uuid string, wipeDisks bool) error
+	CreateDomain(ctx context.Context, spec lvpkg.CreateSpec) (*lvpkg.CreatedDomain, error)
 }
 
 // VMOwnershipStore is the subset of *db.DB the handler uses.
@@ -50,6 +52,7 @@ func (h *VMHandler) Mount(r chi.Router, authMW func(http.Handler) http.Handler) 
 	r.Route("/api/vms", func(r chi.Router) {
 		r.Use(authMW)
 		r.Get("/", h.List)
+		r.Post("/", h.Create)
 		// Power ops — owner or admin. Not gated by locked flag;
 		// "locked" protects delete, not power cycling.
 		r.Post("/{uuid}/start", h.Start)
@@ -64,6 +67,11 @@ func (h *VMHandler) Mount(r chi.Router, authMW func(http.Handler) http.Handler) 
 		// libvirt VM into staxv's ownership model, or to let one go.
 		r.Post("/{uuid}/claim", h.Claim)
 		r.Post("/{uuid}/release", h.Release)
+		// Delete — owner or admin, refused on locked VMs (→ 409).
+		// Removes the VM from libvirt (destroy if running + undefine
+		// with NVRAM+ManagedSave+Snapshots flags), wipes its qcow2
+		// disks, and drops our ownership row.
+		r.Delete("/{uuid}", h.Delete)
 	})
 }
 
@@ -361,6 +369,147 @@ func (h *VMHandler) Claim(w http.ResponseWriter, r *http.Request) {
 		"claimed_by", u.ID, "is_admin", u.IsAdmin,
 	)
 	writeJSON(w, http.StatusOK, own)
+}
+
+// Delete destroys a VM and wipes its backing disks. Flow:
+//   1. Authorize (owner or admin; 404 otherwise).
+//   2. Refuse if locked (409).
+//   3. Ask libvirt to destroy+undefine with the NVRAM etc. flag
+//      bundle that vm-manager forgot to set (see memory/architecture.md
+//      "libvirt domain delete" — the bug-we-must-not-repeat).
+//   4. Drop the staxv ownership row. Order matters: libvirt first, so
+//      that a libvirt failure doesn't leave us with an orphan DB row
+//      pointing at a VM that still exists.
+func (h *VMHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromCtx(r.Context())
+	uuid := chi.URLParam(r, "uuid")
+
+	own, err := h.requireVMAccess(r.Context(), u, uuid)
+	if err != nil {
+		h.writeActionResult(w, "delete", uuid, err)
+		return
+	}
+	if own != nil && own.Locked {
+		writeError(w, "VM is locked; unlock before deleting", http.StatusConflict)
+		return
+	}
+
+	if err := h.libvirt.DeleteDomain(uuid, true); err != nil {
+		if errors.Is(err, lvpkg.ErrDomainNotFound) {
+			// Libvirt doesn't know this VM — but we might still have
+			// an orphan ownership row (e.g., admin deleted via virsh
+			// out-of-band). Sweep the DB row either way.
+			_ = h.store.ReleaseVM(r.Context(), uuid)
+			writeError(w, "not found", http.StatusNotFound)
+			return
+		}
+		slog.Warn("delete: libvirt", "err", err, "uuid", uuid)
+		writeError(w, "delete failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	// libvirt delete succeeded — clear our row. Release is idempotent,
+	// so a no-op if the row didn't exist (adopted-VM admin delete).
+	if err := h.store.ReleaseVM(r.Context(), uuid); err != nil {
+		slog.Error("delete: release ownership row", "err", err, "uuid", uuid)
+		// VM is gone from libvirt; DB row leak is cosmetic. Return
+		// success so the UI refreshes — manual cleanup later if needed.
+	}
+
+	slog.Info("vm deleted",
+		"uuid", uuid, "user_id", u.ID, "is_admin", u.IsAdmin,
+		"had_ownership_row", own != nil,
+	)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// -----------------------------------------------------------------------
+// Create
+// -----------------------------------------------------------------------
+
+// createRequest matches the JSON the current CreateVM.jsx form sends:
+//
+//	{name, ram, cpu, host_cpu, disks, devices}
+//
+// `ram` is MiB (frontend convention). `cpu` is vCPU count. `disks` and
+// `devices` are present but empty in the basic form — we honor empty
+// and apply defaults (10 GB primary disk, default NAT NIC, etc.).
+type createRequest struct {
+	Name    string `json:"name"`
+	RAM     int    `json:"ram"`      // MiB
+	CPU     int    `json:"cpu"`      // vCPU count
+	HostCPU bool   `json:"host_cpu"` // host-passthrough CPU mode
+	// disks/devices: ignored for now — #8 disk mgmt and future edit
+	// flows handle extras. v1 just provisions a single 10 GB qcow2.
+	DiskGB int `json:"disk_gb,omitempty"` // optional override; 0 → 10
+}
+
+// Create provisions a new VM. Caller becomes the owner (staxv
+// ownership row inserted). Does NOT auto-start the VM — operator
+// clicks Start from the VM list after reviewing. That gap also gives
+// us a natural place to attach an ISO before boot in a future edit
+// flow.
+//
+// Quotas: not enforced here yet. #33 epic's quota-check work lands
+// when we have real numbers to enforce against. Current behavior:
+// accept any sane spec; document deferred work explicitly.
+func (h *VMHandler) Create(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromCtx(r.Context())
+	if u == nil {
+		writeError(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
+	var req createRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	diskGB := req.DiskGB
+	if diskGB == 0 {
+		diskGB = 10 // sensible default for a blank install; user can resize later
+	}
+
+	spec := lvpkg.CreateSpec{
+		Name:     req.Name,
+		VCPUs:    req.CPU,
+		MemoryMB: req.RAM,
+		HostCPU:  req.HostCPU,
+		DiskGB:   diskGB,
+		// PoolPath empty → lvpkg.DefaultPoolPath (/var/lib/libvirt/images).
+		// Per-user pools (#33) land when internal/provision/ ships.
+		OwnerID: u.ID,
+	}
+
+	created, err := h.libvirt.CreateDomain(r.Context(), spec)
+	if err != nil {
+		slog.Warn("vm create", "err", err, "name", req.Name, "user_id", u.ID)
+		writeError(w, "create failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Insert ownership row. If this fails we leave the libvirt domain
+	// in place — admin can Claim later. Shouldn't silently eat the
+	// primary success (the VM really does exist), so just log.
+	if _, err := h.store.ClaimVM(r.Context(), created.UUID, created.Name, u.ID); err != nil {
+		slog.Error("vm create: claim ownership row", "err", err, "uuid", created.UUID)
+	}
+
+	slog.Info("vm created",
+		"uuid", created.UUID, "name", created.Name,
+		"vcpus", spec.VCPUs, "memory_mb", spec.MemoryMB, "disk_gb", diskGB,
+		"user_id", u.ID, "disk_path", created.DiskPath,
+	)
+
+	// Frontend navigates to /vms/:uuid on success — response shape
+	// just needs `uuid`. Return the full summary so future UX could
+	// show a confirmation banner with the spec.
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"uuid":      created.UUID,
+		"name":      created.Name,
+		"disk_path": created.DiskPath,
+	})
 }
 
 // Release removes the ownership row, returning the VM to adopted/

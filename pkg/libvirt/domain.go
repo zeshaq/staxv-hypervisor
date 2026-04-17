@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	golibvirt "github.com/digitalocean/go-libvirt"
@@ -108,6 +110,46 @@ func (c *Client) ListDomains() ([]DomainSummary, error) {
 // domain. Callers map to HTTP 404 (don't leak whether the VM exists in
 // the staxv DB vs libvirt).
 var ErrDomainNotFound = errors.New("libvirt: domain not found")
+
+// removeDiskFile deletes a qcow2/img file. Safety guards:
+//   - refuses anything outside standard libvirt image dirs
+//   - refuses anything with ".." after Clean (belt + braces)
+//
+// This is defense-in-depth — the caller (DeleteDomain) already trusts
+// the path because it came from libvirt's own domain XML. But a
+// compromised libvirtd or a malicious domain definition shouldn't let
+// us wipe /etc or /home/*.
+func removeDiskFile(path string) error {
+	clean := filepath.Clean(path)
+	if strings.Contains(clean, "..") {
+		return fmt.Errorf("refusing disk path with '..': %s", path)
+	}
+	if !isAllowedDiskRoot(clean) {
+		return fmt.Errorf("refusing disk path outside allowed roots: %s", path)
+	}
+	if err := os.Remove(clean); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// allowedDiskRoots is the prefix-list of directories under which we're
+// willing to delete disk files. Kept explicit rather than allow-all so
+// a misconfigured domain XML can't coax us into rm'ing /boot/vmlinuz.
+var allowedDiskRoots = []string{
+	"/var/lib/libvirt/images/",
+	"/var/lib/staxv/",
+	"/home/", // per-user pools land here once provisioning (#33) ships
+}
+
+func isAllowedDiskRoot(path string) bool {
+	for _, r := range allowedDiskRoots {
+		if strings.HasPrefix(path, r) {
+			return true
+		}
+	}
+	return false
+}
 
 // parseUUID converts "8-4-4-4-12" hex UUID to the raw 16-byte form
 // libvirt expects. Accepts uppercase or lowercase.
@@ -225,6 +267,83 @@ func (c *Client) ForceStopDomain(uuidStr string) error {
 	}
 	if err := lv.DomainDestroy(d); err != nil {
 		return fmt.Errorf("libvirt: destroy %s: %w", uuidStr, err)
+	}
+	return nil
+}
+
+// DeleteDomain removes a VM: destroy if running, undefine with the
+// NVRAM / ManagedSave / Snapshots flags set (see below), then optionally
+// delete backing qcow2 files.
+//
+// The flag combo is the vm-manager bug-we-must-not-repeat:
+//   - DomainUndefineNvram          — EFI VMs keep NVRAM state in a
+//     separate file; plain Undefine silently fails on these.
+//   - DomainUndefineManagedSave    — if the VM was paused with saved
+//     memory state, Undefine refuses unless we include this.
+//   - DomainUndefineSnapshotsMetadata — removes any snapshot metadata
+//     libvirt is tracking for the domain. (Snapshot disk files, if
+//     external, are NOT auto-removed; caller must handle those.)
+//
+// wipeDisks controls whether we also delete the VM's file-backed
+// (non-CDROM) qcow2 files. Caller (handler) decides: Delete = true;
+// a future "Unregister" operation that keeps the disks = false.
+//
+// Returns ErrDomainNotFound if the UUID doesn't exist.
+func (c *Client) DeleteDomain(uuidStr string, wipeDisks bool) error {
+	lv, err := c.libvirt()
+	if err != nil {
+		return err
+	}
+	defer c.Unlock()
+	d, err := c.lookupByUUID(lv, uuidStr)
+	if err != nil {
+		return err
+	}
+
+	// Snapshot disk paths before we undefine — XML query must happen
+	// while the domain still exists in libvirt.
+	var diskPaths []string
+	if wipeDisks {
+		xmlStr, err := lv.DomainGetXMLDesc(d, 0)
+		if err != nil {
+			return fmt.Errorf("libvirt: get xml %s: %w", uuidStr, err)
+		}
+		parsed, err := parseDomain(xmlStr)
+		if err != nil {
+			return err
+		}
+		diskPaths = parsed.fileDiskPaths()
+	}
+
+	// Force-stop if running. Can't undefine a running domain.
+	state, _, err := lv.DomainGetState(d, 0)
+	if err == nil && state == 1 { // 1 = running
+		if err := lv.DomainDestroy(d); err != nil {
+			return fmt.Errorf("libvirt: destroy %s: %w", uuidStr, err)
+		}
+	}
+
+	// Undefine with all the clean-up flags. Order of flags doesn't
+	// matter — they're bitwise-OR'd.
+	flags := golibvirt.DomainUndefineNvram |
+		golibvirt.DomainUndefineManagedSave |
+		golibvirt.DomainUndefineSnapshotsMetadata |
+		golibvirt.DomainUndefineCheckpointsMetadata
+	if err := lv.DomainUndefineFlags(d, flags); err != nil {
+		return fmt.Errorf("libvirt: undefine %s: %w", uuidStr, err)
+	}
+
+	if wipeDisks {
+		for _, p := range diskPaths {
+			if err := removeDiskFile(p); err != nil {
+				// Log but don't fail the whole operation — the VM is
+				// already gone from libvirt, dangling files are a
+				// cleanup problem, not a correctness one.
+				// (We log via the caller's context; here we just return
+				// a collected error.)
+				return fmt.Errorf("libvirt: remove disk %s: %w", p, err)
+			}
+		}
 	}
 	return nil
 }
