@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/template"
 
+	golibvirt "github.com/digitalocean/go-libvirt"
 	"github.com/google/uuid"
 )
 
