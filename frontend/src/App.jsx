@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react'
 import api from './api'
 import Layout from './components/Layout'
 import Login from './pages/Login'
-import Home from './pages/Home'
+// Home merged into Dashboard (2026-04-17) — storage pools + quick-links live there now.
 import VMList from './pages/VMList'
 import VMDetail from './pages/VMDetail'
 import CreateVM from './pages/CreateVM'
@@ -87,7 +87,7 @@ export default function App() {
           <PrivateRoute authState={authState}>
             <Layout username={authState?.username} onLogout={handleLogout}>
               <Routes>
-                <Route path="/" element={<Home />} />
+                <Route path="/" element={<Dashboard />} />
                 <Route path="/vms" element={<VMList />} />
                 <Route path="/vms/create" element={<CreateVM />} />
                 <Route path="/vms/:uuid" element={<VMDetail />} />
