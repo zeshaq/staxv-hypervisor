@@ -11,7 +11,8 @@ import (
 )
 
 // newTestStore spins up an in-memory SQLite with migrations applied +
-// a random AEAD key, ready for settings CRUD.
+// a random AEAD key, and seeds users with ids 1 and 2 so FK constraints
+// on settings.owner_id are satisfied.
 func newTestStore(t *testing.T) *SettingsStore {
 	t.Helper()
 	ctx := context.Background()
@@ -23,6 +24,23 @@ func newTestStore(t *testing.T) *SettingsStore {
 		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+
+	// Seed two users matching the IDs used by tests below. Settings
+	// has a FK to users; without these, every INSERT would 787.
+	for _, u := range []struct {
+		id   int64
+		name string
+	}{
+		{1, "alice"},
+		{2, "bob"},
+	} {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO users (id, username, password_hash, unix_username, unix_uid, home_path, staxv_dir)
+			VALUES (?, ?, '', ?, ?, '/home/'||?, '/home/'||?||'/.staxv')
+		`, u.id, u.name, u.name, u.id+10000, u.name, u.name); err != nil {
+			t.Fatalf("seed user %s: %v", u.name, err)
+		}
+	}
 
 	key := make([]byte, secrets.KeySize)
 	if _, err := rand.Read(key); err != nil {
