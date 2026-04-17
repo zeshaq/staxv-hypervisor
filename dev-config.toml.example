@@ -16,6 +16,12 @@ path = "./tmp/staxv.db"
 secret_path = "./tmp/jwt.key"   # 32-byte HS256 secret; generated on first run
 ttl = "24h"                     # session lifetime
 
+[secrets]
+# 32-byte AES-256 key used to encrypt /api/settings values at rest.
+# Auto-generated on first run. Back this up in prod — losing it makes
+# encrypted settings unreadable.
+key_path = "./tmp/settings.key"
+
 [host]
 # Ubuntu defaults — override only if libvirt runs as different user (RHEL etc.)
 qemu_user  = "libvirt-qemu"

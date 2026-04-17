@@ -34,6 +34,10 @@ type Config struct {
 		TTL        time.Duration `toml:"ttl"`         // session lifetime, e.g. "24h"
 	} `toml:"auth"`
 
+	Secrets struct {
+		KeyPath string `toml:"key_path"` // file holding 32-byte AES-256 key for at-rest encryption
+	} `toml:"secrets"`
+
 	Host struct {
 		QemuUser  string `toml:"qemu_user"`  // default "libvirt-qemu" (Ubuntu)
 		QemuGroup string `toml:"qemu_group"` // default "kvm" (Ubuntu)
@@ -75,6 +79,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Auth.TTL == 0 {
 		c.Auth.TTL = 24 * time.Hour
+	}
+	if c.Secrets.KeyPath == "" {
+		c.Secrets.KeyPath = "./tmp/settings.key"
 	}
 	if c.Host.QemuUser == "" {
 		c.Host.QemuUser = "libvirt-qemu"

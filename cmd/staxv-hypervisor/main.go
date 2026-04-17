@@ -34,6 +34,7 @@ import (
 	"github.com/zeshaq/staxv-hypervisor/internal/db"
 	"github.com/zeshaq/staxv-hypervisor/internal/handlers"
 	"github.com/zeshaq/staxv-hypervisor/pkg/auth"
+	"github.com/zeshaq/staxv-hypervisor/pkg/secrets"
 	"golang.org/x/term"
 )
 
@@ -136,6 +137,19 @@ func cmdServe(args []string) {
 	signer := auth.NewSigner(secret, cfg.Auth.TTL)
 	authMW := auth.Middleware(signer, store)
 
+	// Settings at-rest encryption key.
+	encKey, err := secrets.LoadOrCreateKey(cfg.Secrets.KeyPath)
+	if err != nil {
+		slog.Error("load/create settings key", "err", err, "path", cfg.Secrets.KeyPath)
+		os.Exit(1)
+	}
+	aead, err := secrets.NewAEAD(encKey)
+	if err != nil {
+		slog.Error("init AEAD", "err", err)
+		os.Exit(1)
+	}
+	settingsStore := db.NewSettingsStore(store, aead)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -149,6 +163,10 @@ func cmdServe(args []string) {
 	// Auth — login/logout public, /me gated by authMW (attached inside Mount)
 	authH := handlers.NewAuthHandler(store, signer, cfg.Server.Secure)
 	authH.Mount(r, authMW)
+
+	// Settings — all routes gated.
+	settingsH := handlers.NewSettingsHandler(settingsStore)
+	settingsH.Mount(r, authMW)
 
 	srv := &http.Server{
 		Addr:              cfg.Server.Addr,
@@ -189,10 +207,14 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 func rootHandler(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("staxv-hypervisor " + version + "\n\n" +
 		"Try:\n" +
-		"  GET  /healthz\n" +
-		"  POST /api/auth/login\n" +
-		"  GET  /api/auth/me         (requires cookie)\n" +
-		"  POST /api/auth/logout\n"))
+		"  GET    /healthz\n" +
+		"  POST   /api/auth/login\n" +
+		"  GET    /api/auth/me          (requires cookie)\n" +
+		"  POST   /api/auth/logout\n" +
+		"  GET    /api/settings\n" +
+		"  GET    /api/settings/{key}\n" +
+		"  PUT    /api/settings/{key}   {\"value\":\"...\"}\n" +
+		"  DELETE /api/settings/{key}\n"))
 }
 
 // -----------------------------------------------------------------------
