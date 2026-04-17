@@ -45,6 +45,14 @@ func Handler() http.Handler {
 	fileServer := http.FileServer(http.FS(sub))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Don't SPA-fallback API paths — an unknown /api/... should 404
+		// (honest "this endpoint doesn't exist") rather than quietly
+		// returning index.html and confusing clients that expected JSON.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
+
 		// Strip leading slash for fs lookups.
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
