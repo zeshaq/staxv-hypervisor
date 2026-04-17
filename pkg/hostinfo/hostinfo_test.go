@@ -19,7 +19,10 @@ func TestCollect(t *testing.T) {
 		t.Skipf("hostinfo Collect is only exercised on Linux (got %s)", runtime.GOOS)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Generous: on a busy hypervisor host with thousands of qemu
+	// threads, even the cheap-pass process enumeration can take a
+	// couple of seconds the first time through.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	snap, err := Collect(ctx)

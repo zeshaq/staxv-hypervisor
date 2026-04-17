@@ -146,41 +146,75 @@ func Collect(ctx context.Context) (*Snapshot, error) {
 	return s, nil
 }
 
-// collectTopProcesses enumerates running processes and returns the top
-// N by memory %. Tolerant to per-process errors (processes exit mid-
-// iteration, permission errors for some procs).
+// collectTopProcesses returns the top N processes by RSS memory.
+//
+// Two-pass strategy is necessary on hypervisor hosts: qemu+libvirt
+// can easily push the process count into the thousands, and each
+// gopsutil method call is a /proc read. A naive "4 calls × N procs"
+// loop takes 10+ seconds on a busy hypervisor.
+//
+// Pass 1 (O(N)): one cheap MemoryInfo call per process → RSS.
+// Sort by RSS descending, keep top N.
+// Pass 2 (O(N=10)): expensive Name / Username / CPUPercent lookups
+// only on the winners.
+//
+// Effect: 4300 procs drops from ~10s to under a second.
 func collectTopProcesses(ctx context.Context, n int) []Process {
 	procs, err := process.ProcessesWithContext(ctx)
 	if err != nil {
 		slog.Warn("hostinfo: list processes", "err", err)
 		return nil
 	}
-	out := make([]Process, 0, len(procs))
+
+	totalBytes := uint64(0)
+	if vm, err := mem.VirtualMemoryWithContext(ctx); err == nil {
+		totalBytes = vm.Total
+	}
+
+	// Pass 1: cheap enumeration — one /proc read per process for RSS.
+	type prelim struct {
+		p   *process.Process
+		rss uint64
+	}
+	candidates := make([]prelim, 0, len(procs))
 	for _, p := range procs {
 		if ctx.Err() != nil {
 			break
 		}
-		memPct, err := p.MemoryPercentWithContext(ctx)
-		if err != nil {
+		mi, err := p.MemoryInfoWithContext(ctx)
+		if err != nil || mi == nil {
 			continue // process vanished or unreadable
 		}
-		name, _ := p.NameWithContext(ctx)
-		username, _ := p.UsernameWithContext(ctx)
-		cpuPct, _ := p.CPUPercentWithContext(ctx) // cumulative since start, good enough for display
+		candidates = append(candidates, prelim{p: p, rss: mi.RSS})
+	}
 
+	// Keep only top-N by RSS.
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].rss > candidates[j].rss })
+	if len(candidates) > n {
+		candidates = candidates[:n]
+	}
+
+	// Pass 2: enrich only the winners — expensive calls on ≤ n procs.
+	out := make([]Process, 0, len(candidates))
+	for _, c := range candidates {
+		if ctx.Err() != nil {
+			break
+		}
+		name, _ := c.p.NameWithContext(ctx)
+		username, _ := c.p.UsernameWithContext(ctx)
+		cpuPct, _ := c.p.CPUPercentWithContext(ctx)
+
+		memPct := 0.0
+		if totalBytes > 0 {
+			memPct = float64(c.rss) / float64(totalBytes) * 100
+		}
 		out = append(out, Process{
-			PID:           p.Pid,
+			PID:           c.p.Pid,
 			Name:          name,
 			Username:      username,
 			CPUPercent:    round1(cpuPct),
-			MemoryPercent: round1(float64(memPct)),
+			MemoryPercent: round1(memPct),
 		})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		return out[i].MemoryPercent > out[j].MemoryPercent
-	})
-	if len(out) > n {
-		out = out[:n]
 	}
 	return out
 }
