@@ -1,20 +1,22 @@
 # Copy to dev-config.toml (gitignored) and tweak for your box.
-# In dev, passed via: --config ./dev-config.toml
-# In staging/prod, config lives at /etc/staxv-hypervisor/config.toml.
+# Dev run: make dev   (air uses ./dev-config.toml via .air.toml args_bin)
+# Prod/staging run: /etc/staxv-hypervisor/config.toml.
 
 [server]
-addr = ":5001"
+addr = ":5001"      # coexists with vm-manager on :5000
+secure = false      # set true when serving behind TLS (cookie Secure flag)
 
 [log]
-level = "debug"   # debug | info | warn | error
+level = "debug"     # debug | info | warn | error
 
-# [libvirt]
-# uri = "qemu:///system"
+[db]
+path = "./tmp/staxv.db"
 
-# [db]
-# path = "./tmp/staxv-dev.db"
+[auth]
+secret_path = "./tmp/jwt.key"   # 32-byte HS256 secret; generated on first run
+ttl = "24h"                     # session lifetime
 
-# [host]
-# # Ubuntu defaults — override only if libvirt runs as different user (RHEL etc.)
-# qemu_user  = "libvirt-qemu"
-# qemu_group = "kvm"
+[host]
+# Ubuntu defaults — override only if libvirt runs as different user (RHEL etc.)
+qemu_user  = "libvirt-qemu"
+qemu_group = "kvm"
