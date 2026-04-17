@@ -52,6 +52,10 @@ type Config struct {
 	Libvirt struct {
 		URI string `toml:"uri"` // default unix:///var/run/libvirt/libvirt-sock
 	} `toml:"libvirt"`
+
+	ISOs struct {
+		SharedPath string `toml:"shared_path"` // default /var/lib/staxv/shared/isos
+	} `toml:"isos"`
 }
 
 // Load reads path and returns the parsed config with defaults filled in.
@@ -107,5 +111,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Libvirt.URI == "" {
 		c.Libvirt.URI = "unix:///var/run/libvirt/libvirt-sock"
+	}
+	if c.ISOs.SharedPath == "" {
+		c.ISOs.SharedPath = "/var/lib/staxv/shared/isos"
 	}
 }

@@ -41,3 +41,9 @@ qemu_group = "kvm"
 # Local qemu:///system via the standard Ubuntu socket. For remote libvirt
 # (tcp+tls://), support pending — we'd need TLS client cert setup.
 uri = "unix:///var/run/libvirt/libvirt-sock"
+
+[isos]
+# Shared ISO library — admin-uploaded files, readable by everyone for
+# VM creation. Created on first run (0755). Per-user libraries will
+# be added with #33 provisioning.
+shared_path = "/var/lib/staxv/shared/isos"

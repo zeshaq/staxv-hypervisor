@@ -33,6 +33,7 @@ import (
 	"github.com/zeshaq/staxv-hypervisor/internal/config"
 	"github.com/zeshaq/staxv-hypervisor/internal/db"
 	"github.com/zeshaq/staxv-hypervisor/internal/handlers"
+	"github.com/zeshaq/staxv-hypervisor/internal/isolib"
 	"github.com/zeshaq/staxv-hypervisor/internal/webui"
 	"github.com/zeshaq/staxv-hypervisor/pkg/auth"
 	lvpkg "github.com/zeshaq/staxv-hypervisor/pkg/libvirt"
@@ -192,6 +193,18 @@ func cmdServe(args []string) {
 	// Host dashboard — uptime, CPU, mem, disk, net, top processes.
 	dashH := handlers.NewDashboardHandler()
 	dashH.Mount(r, authMW)
+
+	// ISO library — shared admin-uploaded ISOs at isos.shared_path.
+	// Creates the directory 0755 on first run. List visible to every
+	// authenticated user; upload/delete admin-only.
+	isoLib, err := isolib.New(cfg.ISOs.SharedPath)
+	if err != nil {
+		slog.Error("isolib init failed — /api/images disabled", "err", err, "path", cfg.ISOs.SharedPath)
+	} else {
+		slog.Info("iso library", "path", cfg.ISOs.SharedPath)
+		imagesH := handlers.NewImagesHandler(store, isoLib)
+		imagesH.Mount(r, authMW)
+	}
 
 	// libvirt client — single shared connection to qemu:///system.
 	// Fail-soft: if libvirt is down at startup, log the error and keep
