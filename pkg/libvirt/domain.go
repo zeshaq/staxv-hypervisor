@@ -2,6 +2,7 @@ package libvirt
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -101,4 +102,119 @@ func (c *Client) ListDomains() ([]DomainSummary, error) {
 		})
 	}
 	return out, nil
+}
+
+// ErrDomainNotFound is returned when a UUID doesn't match any libvirt
+// domain. Callers map to HTTP 404 (don't leak whether the VM exists in
+// the staxv DB vs libvirt).
+var ErrDomainNotFound = errors.New("libvirt: domain not found")
+
+// parseUUID converts "8-4-4-4-12" hex UUID to the raw 16-byte form
+// libvirt expects. Accepts uppercase or lowercase.
+func parseUUID(s string) ([16]byte, error) {
+	var out [16]byte
+	clean := strings.ReplaceAll(s, "-", "")
+	if len(clean) != 32 {
+		return out, fmt.Errorf("libvirt: uuid %q wrong length", s)
+	}
+	b, err := hex.DecodeString(clean)
+	if err != nil {
+		return out, fmt.Errorf("libvirt: uuid %q not hex: %w", s, err)
+	}
+	copy(out[:], b)
+	return out, nil
+}
+
+// lookupByUUID resolves a UUID string to libvirt's Domain struct.
+// MUST be called while holding the client mutex (i.e., inside a block
+// that's already called c.libvirt() and deferred c.Unlock()).
+func (c *Client) lookupByUUID(lv *golibvirt.Libvirt, uuidStr string) (golibvirt.Domain, error) {
+	u, err := parseUUID(uuidStr)
+	if err != nil {
+		return golibvirt.Domain{}, err
+	}
+	d, err := lv.DomainLookupByUUID(golibvirt.UUID(u))
+	if err != nil {
+		return golibvirt.Domain{}, fmt.Errorf("%w: %s", ErrDomainNotFound, uuidStr)
+	}
+	return d, nil
+}
+
+// StartDomain boots a defined-but-stopped VM. libvirt error if the VM
+// is already running.
+func (c *Client) StartDomain(uuidStr string) error {
+	lv, err := c.libvirt()
+	if err != nil {
+		return err
+	}
+	defer c.Unlock()
+	d, err := c.lookupByUUID(lv, uuidStr)
+	if err != nil {
+		return err
+	}
+	if err := lv.DomainCreate(d); err != nil {
+		return fmt.Errorf("libvirt: start %s: %w", uuidStr, err)
+	}
+	return nil
+}
+
+// ShutdownDomain sends ACPI shutdown (graceful — guest OS runs its
+// shutdown sequence). Quiet success; actual shutdown can take seconds
+// to minutes depending on the guest. Use ForceStopDomain if you need
+// immediate termination.
+func (c *Client) ShutdownDomain(uuidStr string) error {
+	lv, err := c.libvirt()
+	if err != nil {
+		return err
+	}
+	defer c.Unlock()
+	d, err := c.lookupByUUID(lv, uuidStr)
+	if err != nil {
+		return err
+	}
+	if err := lv.DomainShutdown(d); err != nil {
+		return fmt.Errorf("libvirt: shutdown %s: %w", uuidStr, err)
+	}
+	return nil
+}
+
+// ForceStopDomain is the "pull the plug" equivalent — immediate
+// termination, guest filesystems may end up dirty. Maps to vm-manager's
+// "stop" button semantics.
+func (c *Client) ForceStopDomain(uuidStr string) error {
+	lv, err := c.libvirt()
+	if err != nil {
+		return err
+	}
+	defer c.Unlock()
+	d, err := c.lookupByUUID(lv, uuidStr)
+	if err != nil {
+		return err
+	}
+	if err := lv.DomainDestroy(d); err != nil {
+		return fmt.Errorf("libvirt: destroy %s: %w", uuidStr, err)
+	}
+	return nil
+}
+
+// RebootDomain sends ACPI reboot (graceful). Guest must respond for it
+// to actually reboot; orphaned ACPI signals are silently ignored by
+// libvirt — so a "success" from this doesn't guarantee the reboot
+// completed. For a hard reset, use ForceStopDomain + StartDomain.
+func (c *Client) RebootDomain(uuidStr string) error {
+	lv, err := c.libvirt()
+	if err != nil {
+		return err
+	}
+	defer c.Unlock()
+	d, err := c.lookupByUUID(lv, uuidStr)
+	if err != nil {
+		return err
+	}
+	// Flags=0 = default (ACPI). Libvirt also accepts GUEST_AGENT or
+	// SIGNAL flags, but ACPI is the safe default.
+	if err := lv.DomainReboot(d, 0); err != nil {
+		return fmt.Errorf("libvirt: reboot %s: %w", uuidStr, err)
+	}
+	return nil
 }
