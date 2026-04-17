@@ -1,0 +1,20 @@
+# Copy to dev-config.toml (gitignored) and tweak for your box.
+# In dev, passed via: --config ./dev-config.toml
+# In staging/prod, config lives at /etc/staxv-hypervisor/config.toml.
+
+[server]
+addr = ":5001"
+
+[log]
+level = "debug"   # debug | info | warn | error
+
+# [libvirt]
+# uri = "qemu:///system"
+
+# [db]
+# path = "./tmp/staxv-dev.db"
+
+# [host]
+# # Ubuntu defaults — override only if libvirt runs as different user (RHEL etc.)
+# qemu_user  = "libvirt-qemu"
+# qemu_group = "kvm"

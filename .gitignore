@@ -32,8 +32,10 @@ go.work.sum
 # .vscode/
 
 # staxv-hypervisor specific
-staxv-hypervisor
-staxv-hypervisor.exe
+# Anchor to repo root so this matches only the built binary, not
+# paths like cmd/staxv-hypervisor/ or api/staxv-hypervisor/.
+/staxv-hypervisor
+/staxv-hypervisor.exe
 config.toml
 secrets.json
 secrets.json.tmp
@@ -48,3 +50,8 @@ static/
 # Claude memory — secrets only. All other memory files ARE committed
 # so the repo is self-describing to future sessions and collaborators.
 .claude/memory/servers.md
+
+# Dev-loop artifacts
+/tmp/
+dev-config.toml
+build-errors.log

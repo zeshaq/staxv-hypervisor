@@ -1,0 +1,29 @@
+# air config — https://github.com/air-verse/air
+# Runs: go build → kills old process → starts new one, on every *.go save.
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd          = "go build -ldflags=\"-X main.version=dev-air\" -o ./tmp/staxv-hypervisor ./cmd/staxv-hypervisor"
+  bin          = "./tmp/staxv-hypervisor"
+  args_bin     = ["serve", "--config", "./dev-config.toml", "--addr", ":5001"]
+  delay        = 500                # ms debounce for rapid saves
+  kill_delay   = "2s"               # graceful-shutdown window before SIGKILL
+  send_interrupt = true             # SIGINT first, not SIGKILL — triggers graceful shutdown
+  stop_on_error  = false            # keep last-working binary running if build fails
+  log          = "build-errors.log"
+  include_ext  = ["go", "toml", "tmpl", "html"]
+  exclude_dir  = ["tmp", "vendor", "frontend", "static", ".git", ".claude", ".github"]
+  exclude_regex = ["_test\\.go"]
+
+[log]
+  time = true
+
+[color]
+  build   = "yellow"
+  runner  = "green"
+  app     = ""
+
+[screen]
+  clear_on_rebuild = false
