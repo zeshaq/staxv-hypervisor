@@ -24,6 +24,14 @@ type LibvirtClient interface {
 	RebootDomain(uuid string) error
 	DeleteDomain(uuid string, wipeDisks bool) error
 	CreateDomain(ctx context.Context, spec lvpkg.CreateSpec) (*lvpkg.CreatedDomain, error)
+	AttachISO(uuid, isoPath string) error
+	DetachISO(uuid string) error
+}
+
+// VMISOStore is the ISO-lookup surface the VMs handler needs to
+// validate attach-iso requests. *db.DB satisfies it.
+type VMISOStore interface {
+	GetISO(ctx context.Context, id int64) (*db.ISO, error)
 }
 
 // VMOwnershipStore is the subset of *db.DB the handler uses.
@@ -36,15 +44,16 @@ type VMOwnershipStore interface {
 	ReleaseVM(ctx context.Context, uuid string) error
 }
 
-// VMHandler serves /api/vms. Read + power ops + lock/unlock.
-// Delete (#7) and create (#5) still pending.
+// VMHandler serves /api/vms. Full CRUD + power ops + lock/unlock +
+// claim/release + attach-iso / detach-iso.
 type VMHandler struct {
 	libvirt LibvirtClient
 	store   VMOwnershipStore
+	isos    VMISOStore
 }
 
-func NewVMHandler(libvirt LibvirtClient, store VMOwnershipStore) *VMHandler {
-	return &VMHandler{libvirt: libvirt, store: store}
+func NewVMHandler(libvirt LibvirtClient, store VMOwnershipStore, isos VMISOStore) *VMHandler {
+	return &VMHandler{libvirt: libvirt, store: store, isos: isos}
 }
 
 // Mount attaches /api/vms routes, all gated by authMW.
@@ -72,6 +81,10 @@ func (h *VMHandler) Mount(r chi.Router, authMW func(http.Handler) http.Handler) 
 		// with NVRAM+ManagedSave+Snapshots flags), wipes its qcow2
 		// disks, and drops our ownership row.
 		r.Delete("/{uuid}", h.Delete)
+		// CD-ROM media — insert/eject an ISO at the VM's CDROM slot.
+		// Live change if VM is running; persistent in any case.
+		r.Post("/{uuid}/attach-iso", h.AttachISO)
+		r.Post("/{uuid}/detach-iso", h.DetachISO)
 	})
 }
 
@@ -419,6 +432,82 @@ func (h *VMHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		"uuid", uuid, "user_id", u.ID, "is_admin", u.IsAdmin,
 		"had_ownership_row", own != nil,
 	)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// -----------------------------------------------------------------------
+// CD-ROM / ISO attach-detach
+// -----------------------------------------------------------------------
+
+type attachISORequest struct {
+	ISOID int64 `json:"iso_id"`
+}
+
+// AttachISO inserts an ISO from the library into the VM's CDROM slot.
+// Requires VM ownership (or admin). ISO visibility: shared (owner_id
+// NULL) or owned by the caller. Non-admin trying to attach another
+// user's ISO → 404 (not "forbidden") to avoid leaking existence.
+func (h *VMHandler) AttachISO(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromCtx(r.Context())
+	uuid := chi.URLParam(r, "uuid")
+
+	if _, err := h.requireVMAccess(r.Context(), u, uuid); err != nil {
+		h.writeActionResult(w, "attach-iso", uuid, err)
+		return
+	}
+
+	var req attachISORequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, "invalid body (expected {iso_id: <n>})", http.StatusBadRequest)
+		return
+	}
+
+	iso, err := h.isos.GetISO(r.Context(), req.ISOID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, "iso not found", http.StatusNotFound)
+			return
+		}
+		slog.Error("attach-iso: lookup", "err", err, "iso_id", req.ISOID)
+		writeError(w, "iso lookup failed", http.StatusInternalServerError)
+		return
+	}
+	// Visibility: shared (owner_id NULL) OR owned by caller OR caller
+	// is admin.
+	if iso.OwnerID != nil && *iso.OwnerID != u.ID && !u.IsAdmin {
+		writeError(w, "iso not found", http.StatusNotFound) // no existence leak
+		return
+	}
+
+	if err := h.libvirt.AttachISO(uuid, iso.Path); err != nil {
+		slog.Warn("attach-iso: libvirt", "err", err, "uuid", uuid, "iso", iso.Name)
+		writeError(w, "attach failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("iso attached",
+		"vm_uuid", uuid, "iso_id", iso.ID, "iso_name", iso.Name,
+		"user_id", u.ID,
+	)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DetachISO ejects whatever media is in the CDROM slot. No-op if
+// already empty (libvirt doesn't error on "eject nothing").
+func (h *VMHandler) DetachISO(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromCtx(r.Context())
+	uuid := chi.URLParam(r, "uuid")
+
+	if _, err := h.requireVMAccess(r.Context(), u, uuid); err != nil {
+		h.writeActionResult(w, "detach-iso", uuid, err)
+		return
+	}
+	if err := h.libvirt.DetachISO(uuid); err != nil {
+		slog.Warn("detach-iso: libvirt", "err", err, "uuid", uuid)
+		writeError(w, "detach failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	slog.Info("iso detached", "vm_uuid", uuid, "user_id", u.ID)
 	w.WriteHeader(http.StatusNoContent)
 }
 

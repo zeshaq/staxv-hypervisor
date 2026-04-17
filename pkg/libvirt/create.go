@@ -265,3 +265,80 @@ func renderDomainXML(args domainXMLArgs) (string, error) {
 	}
 	return buf.String(), nil
 }
+
+// -----------------------------------------------------------------------
+// CD-ROM (ISO) media swap
+// -----------------------------------------------------------------------
+
+// AttachISO inserts/replaces the contents of the VM's primary CD-ROM
+// slot (target dev='sda', bus='sata' — matches what CreateDomain puts
+// in the XML template). Equivalent to `virsh change-media --insert`.
+//
+// Works on both running and stopped VMs; pick flags based on live state
+// so the change is both persistent (survives reboot) AND visible to a
+// running guest right now.
+//
+// Assumes the VM was created by staxv or vm-manager (both use sda/sata
+// for the empty CD-ROM slot). A VM with a different CD-ROM target
+// would need us to parse its XML first — not worth the complexity in
+// v1; admin can `virsh change-media` manually for weird layouts.
+func (c *Client) AttachISO(uuidStr, isoPath string) error {
+	return c.changeMedia(uuidStr, isoPath)
+}
+
+// DetachISO ejects the CD-ROM. Equivalent to `virsh change-media
+// --eject`. No-op if the slot is already empty.
+func (c *Client) DetachISO(uuidStr string) error {
+	return c.changeMedia(uuidStr, "")
+}
+
+// changeMedia is the shared implementation. isoPath="" → eject.
+func (c *Client) changeMedia(uuidStr, isoPath string) error {
+	lv, err := c.libvirt()
+	if err != nil {
+		return err
+	}
+	defer c.Unlock()
+	d, err := c.lookupByUUID(lv, uuidStr)
+	if err != nil {
+		return err
+	}
+
+	// Choose flags: Config always (persist across reboot). Also Live
+	// if VM is running so the guest sees the change immediately.
+	state, _, err := lv.DomainGetState(d, 0)
+	if err != nil {
+		return fmt.Errorf("libvirt: get state %s: %w", uuidStr, err)
+	}
+	flags := golibvirt.DomainDeviceModifyConfig
+	if state == 1 { // running
+		flags |= golibvirt.DomainDeviceModifyLive
+	}
+
+	xmlStr := renderCDROMXML(isoPath)
+	if err := lv.DomainUpdateDeviceFlags(d, xmlStr, flags); err != nil {
+		return fmt.Errorf("libvirt: update cdrom %s: %w", uuidStr, err)
+	}
+	return nil
+}
+
+// renderCDROMXML builds a <disk> fragment for the CD-ROM slot. With
+// isoPath != "" we include a <source> element (insert); empty path
+// means no <source> → ejected/empty media.
+//
+// Hand-rolled string build because the disk fragment is 5 lines and
+// the paths we see have no XML-special chars (they come from our own
+// ISO library which enforces an extension allow-list). xml.Marshal
+// would be overkill.
+func renderCDROMXML(isoPath string) string {
+	var src string
+	if isoPath != "" {
+		src = fmt.Sprintf("    <source file='%s'/>\n", isoPath)
+	}
+	return "<disk type='file' device='cdrom'>\n" +
+		"    <driver name='qemu' type='raw'/>\n" +
+		src +
+		"    <target dev='sda' bus='sata'/>\n" +
+		"    <readonly/>\n" +
+		"</disk>"
+}

@@ -217,7 +217,7 @@ func cmdServe(args []string) {
 	} else {
 		defer lv.Close()
 		slog.Info("libvirt connected", "uri", cfg.Libvirt.URI)
-		vmH := handlers.NewVMHandler(lv, store)
+		vmH := handlers.NewVMHandler(lv, store, store)
 		vmH.Mount(r, authMW)
 	}
 
