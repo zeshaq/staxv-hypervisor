@@ -72,7 +72,7 @@ func (c *Client) ListDomains() ([]DomainSummary, error) {
 	// ConnectListAllDomains with flags=0 returns ALL domains (persistent
 	// + transient, active + inactive). Don't filter by state here; the
 	// caller/UI decides visibility.
-	doms, _, err := lv.ConnectListAllDomains(-1, 0)
+	doms, _, err := lv.ConnectListAllDomains(-1, golibvirt.ConnectListAllDomainsFlags(0))
 	if err != nil {
 		return nil, fmt.Errorf("libvirt: list domains: %w", err)
 	}
@@ -85,7 +85,9 @@ func (c *Client) ListDomains() ([]DomainSummary, error) {
 			// skip rather than aborting the whole list.
 			continue
 		}
-		info, err := lv.DomainGetInfo(d)
+		// DomainGetInfo returns a flat tuple, not a struct:
+		// (state, maxMem, memory, nrVirtCPU, cpuTime, err)
+		_, _, memoryKiB, nrVCPU, _, err := lv.DomainGetInfo(d)
 		if err != nil {
 			continue
 		}
@@ -94,8 +96,8 @@ func (c *Client) ListDomains() ([]DomainSummary, error) {
 			Name:      d.Name,
 			State:     stateName(uint8(stateRaw)),
 			StateCode: int(stateRaw),
-			VCPUs:     uint16(info.NrVirtCPU),
-			MemoryMB:  info.Memory / 1024, // libvirt reports KiB
+			VCPUs:     nrVCPU,
+			MemoryMB:  memoryKiB / 1024, // libvirt reports KiB
 		})
 	}
 	return out, nil
