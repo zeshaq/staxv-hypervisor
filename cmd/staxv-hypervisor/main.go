@@ -188,6 +188,10 @@ func cmdServe(args []string) {
 	hostH := handlers.NewHostHandler()
 	hostH.Mount(r, authMW)
 
+	// Host dashboard — uptime, CPU, mem, disk, net, top processes.
+	dashH := handlers.NewDashboardHandler()
+	dashH.Mount(r, authMW)
+
 	// Web UI — mounted LAST so it catches everything unmatched above.
 	// Serves the embedded React app with SPA fallback (unknown paths →
 	// index.html so React Router handles deep links).
