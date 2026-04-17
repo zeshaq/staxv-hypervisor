@@ -13,8 +13,18 @@ level = "debug"     # debug | info | warn | error
 path = "./tmp/staxv.db"
 
 [auth]
-secret_path = "./tmp/jwt.key"   # 32-byte HS256 secret; generated on first run
-ttl = "24h"                     # session lifetime
+# How passwords are verified:
+#   "db"  — bcrypt hash in the users table (default, self-contained)
+#   "pam" — shell out to pamtester against the host's PAM stack;
+#          users log in with their Linux password. Requires:
+#            apt install pamtester
+#            /etc/pam.d/staxv-hypervisor configured (see memory/multi_tenancy.md)
+#          Users must be linked first:
+#            staxv-hypervisor useradd --username <name> --link-existing
+backend = "db"
+pam_service = "staxv-hypervisor"  # /etc/pam.d/<this name> when backend="pam"
+secret_path = "./tmp/jwt.key"     # 32-byte HS256 secret; generated on first run
+ttl = "24h"                       # session lifetime
 
 [secrets]
 # 32-byte AES-256 key used to encrypt /api/settings values at rest.

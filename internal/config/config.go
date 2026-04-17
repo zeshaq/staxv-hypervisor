@@ -30,8 +30,14 @@ type Config struct {
 	} `toml:"db"`
 
 	Auth struct {
+		// Backend selects how passwords are verified. One of:
+		//   "db"  — bcrypt hash in the users table (default; self-contained)
+		//   "pam" — shell out to pamtester against the host's PAM stack
+		//           (users must first be linked via `useradd --link-existing`)
+		Backend    string        `toml:"backend"`
 		SecretPath string        `toml:"secret_path"` // file holding 32-byte HS256 secret
 		TTL        time.Duration `toml:"ttl"`         // session lifetime, e.g. "24h"
+		PAMService string        `toml:"pam_service"` // name of /etc/pam.d/<name> file; default "staxv-hypervisor"
 	} `toml:"auth"`
 
 	Secrets struct {
@@ -79,6 +85,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Auth.TTL == 0 {
 		c.Auth.TTL = 24 * time.Hour
+	}
+	if c.Auth.Backend == "" {
+		c.Auth.Backend = "db"
+	}
+	if c.Auth.PAMService == "" {
+		c.Auth.PAMService = "staxv-hypervisor"
 	}
 	if c.Secrets.KeyPath == "" {
 		c.Secrets.KeyPath = "./tmp/settings.key"

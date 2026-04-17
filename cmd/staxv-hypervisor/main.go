@@ -35,6 +35,7 @@ import (
 	"github.com/zeshaq/staxv-hypervisor/internal/handlers"
 	"github.com/zeshaq/staxv-hypervisor/internal/webui"
 	"github.com/zeshaq/staxv-hypervisor/pkg/auth"
+	"github.com/zeshaq/staxv-hypervisor/pkg/pamauth"
 	"github.com/zeshaq/staxv-hypervisor/pkg/secrets"
 	"golang.org/x/term"
 )
@@ -138,6 +139,21 @@ func cmdServe(args []string) {
 	signer := auth.NewSigner(secret, cfg.Auth.TTL)
 	authMW := auth.Middleware(signer, store)
 
+	// Pick the credential verifier based on [auth] backend config.
+	// - "db"  (default): *db.DB's bcrypt Verify method
+	// - "pam": shell out to pamtester against the host's PAM stack
+	var verifier auth.CredentialVerifier
+	switch cfg.Auth.Backend {
+	case "db":
+		verifier = store
+	case "pam":
+		verifier = pamauth.NewVerifier(cfg.Auth.PAMService, store)
+	default:
+		slog.Error("unknown [auth] backend", "backend", cfg.Auth.Backend, "valid", "db, pam")
+		os.Exit(1)
+	}
+	slog.Info("auth backend", "backend", cfg.Auth.Backend, "pam_service", cfg.Auth.PAMService)
+
 	// Settings at-rest encryption key.
 	encKey, err := secrets.LoadOrCreateKey(cfg.Secrets.KeyPath)
 	if err != nil {
@@ -161,7 +177,7 @@ func cmdServe(args []string) {
 	r.Get("/healthz", healthzHandler)
 
 	// Auth — login/logout public, /me gated by authMW (attached inside Mount)
-	authH := handlers.NewAuthHandler(store, signer, cfg.Server.Secure)
+	authH := handlers.NewAuthHandler(verifier, signer, cfg.Server.Secure)
 	authH.Mount(r, authMW)
 
 	// Settings — all routes gated.
@@ -216,31 +232,35 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 // rootHandler removed — internal/webui now serves / (React SPA).
 
 // -----------------------------------------------------------------------
-// useradd (STUB — DB only)
+// useradd
 // -----------------------------------------------------------------------
 
-// cmdUseradd creates a users row with a hashed password. It does NOT
-// create a Linux account, a home dir, or a libvirt storage pool — those
-// steps belong to internal/provision/ and land with the multi-tenancy
-// epic (#33).
+// cmdUseradd creates a staxv users row. Two modes:
 //
-// Until then, this is enough to bootstrap a test admin:
+// 1. DB mode (default)
+//      sudo ./staxv-hypervisor useradd --username admin --admin
+//      password: ****
+//    Inserts a row with a bcrypt password hash. No Linux account is
+//    created (that belongs to internal/provision/, epic #33). Suitable
+//    for [auth] backend = "db".
 //
-//	$ sudo ./staxv-hypervisor useradd --username admin --admin
-//	password: ****
+// 2. --link-existing (for [auth] backend = "pam")
+//      sudo ./staxv-hypervisor useradd --username ze --link-existing
+//    Requires the Linux account to already exist. Reads its real UID
+//    and home directory from /etc/passwd. Stores NO password — auth
+//    will verify against the host's /etc/shadow via PAM.
 //
-// The inserted row has unix_uid = the caller's own UID if we can detect
-// it (so the app running as that user can touch files there), else 0.
-// This is a TEST-ONLY hack — the real flow will assign a proper UID in
-// the UID_MIN=20000 range via Linux `useradd`.
+// Linux account creation, home-dir setup, libvirt storage pool, and
+// ACLs are all internal/provision/ work (not yet implemented).
 func cmdUseradd(args []string) {
 	fs := flag.NewFlagSet("useradd", flag.ExitOnError)
 	configPath := fs.String("config", "/etc/staxv-hypervisor/config.toml", "path to TOML config file")
 	username := fs.String("username", "", "username (required)")
 	unixName := fs.String("unix-username", "", "Linux account name (default: same as --username)")
-	uidStr := fs.String("uid", "", "UID (default: current user's UID)")
-	homePath := fs.String("home", "", "home path (default: /home/<unix-username>)")
+	uidStr := fs.String("uid", "", "UID (default: current user's UID, or the Linux user's UID when --link-existing)")
+	homePath := fs.String("home", "", "home path (default: /home/<unix-username>, or the Linux user's home when --link-existing)")
 	admin := fs.Bool("admin", false, "grant admin privileges")
+	linkExisting := fs.Bool("link-existing", false, "link to an existing Linux account (for PAM backend; skips password prompt)")
 	_ = fs.Parse(args)
 
 	if *username == "" {
@@ -250,16 +270,55 @@ func cmdUseradd(args []string) {
 	if *unixName == "" {
 		*unixName = *username
 	}
-	uid, err := resolveUID(*uidStr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "useradd: %v\n", err)
-		os.Exit(2)
-	}
-	if *homePath == "" {
-		*homePath = "/home/" + *unixName
-	}
 
-	password := promptPassword()
+	var (
+		uid      int
+		password string
+		adopted  bool
+		err      error
+	)
+
+	if *linkExisting {
+		// Require the Linux account to exist. Pull its real UID and home
+		// from /etc/passwd so what we store matches reality.
+		lu, err := user.Lookup(*unixName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "useradd: --link-existing: Linux account %q not found: %v\n", *unixName, err)
+			os.Exit(2)
+		}
+		n, err := strconv.Atoi(lu.Uid)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "useradd: Linux UID %q not numeric: %v\n", lu.Uid, err)
+			os.Exit(1)
+		}
+		uid = n
+		if *homePath == "" {
+			*homePath = lu.HomeDir
+		}
+		if *uidStr != "" {
+			override, err := strconv.Atoi(*uidStr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "useradd: --uid: %v\n", err)
+				os.Exit(2)
+			}
+			if override != n {
+				fmt.Fprintf(os.Stderr, "useradd: --uid=%d does not match Linux %s UID=%d; remove --uid or fix\n", override, *unixName, n)
+				os.Exit(2)
+			}
+		}
+		adopted = true
+		// No password prompt — PAM will verify against /etc/shadow.
+	} else {
+		uid, err = resolveUID(*uidStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "useradd: %v\n", err)
+			os.Exit(2)
+		}
+		if *homePath == "" {
+			*homePath = "/home/" + *unixName
+		}
+		password = promptPassword()
+	}
 
 	cfg := mustLoadConfig(*configPath)
 	initLogger(cfg.Log.Level)
@@ -274,23 +333,28 @@ func cmdUseradd(args []string) {
 
 	u, err := store.CreateUser(ctx, db.CreateUserArgs{
 		Username:     *username,
-		Password:     password,
+		Password:     password, // "" when --link-existing; PAM verifies instead
 		UnixUsername: *unixName,
 		UnixUID:      uid,
 		HomePath:     *homePath,
 		StaxvDir:     *homePath + "/.staxv",
 		IsAdmin:      *admin,
+		Adopted:      adopted,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "useradd: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("created user %q (id=%d, uid=%d, admin=%t)\n",
-		u.Username, u.ID, u.UnixUID, u.IsAdmin)
-	fmt.Println()
-	fmt.Println("NOTE: this is the STUB useradd. No Linux account, no storage pool, no ACL.")
-	fmt.Println("      The full provisioning flow lands with multi-tenancy (#33).")
+	fmt.Printf("created user %q (id=%d, uid=%d, admin=%t, adopted=%t)\n",
+		u.Username, u.ID, u.UnixUID, u.IsAdmin, u.Adopted)
+	if *linkExisting {
+		fmt.Printf("  → linked to Linux account %q; authenticates via PAM (requires [auth] backend=\"pam\")\n", u.UnixUsername)
+	} else {
+		fmt.Println()
+		fmt.Println("NOTE: Linux account was NOT created — internal/provision/ work is still pending (#33).")
+		fmt.Println("      Use --link-existing to link against a Linux user you've already created.")
+	}
 }
 
 func resolveUID(s string) (int, error) {

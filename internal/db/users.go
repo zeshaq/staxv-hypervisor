@@ -14,10 +14,9 @@ import (
 // map this to HTTP 404 (never leak which ID exists vs which doesn't).
 var ErrNotFound = errors.New("not found")
 
-// ErrInvalidCredentials is the single error returned by VerifyCredentials
-// for any failure mode (unknown user, bad password, disabled account).
-// Don't distinguish — prevents user enumeration via timing or message.
-var ErrInvalidCredentials = errors.New("invalid credentials")
+// ErrInvalidCredentials is re-exported from pkg/auth so db callers don't
+// need to import two packages for the same canonical error.
+var ErrInvalidCredentials = auth.ErrInvalidCredentials
 
 // userColumns is the SELECT list used everywhere users are loaded —
 // keeps the scan order identical across queries.
@@ -64,11 +63,11 @@ func (db *DB) GetUserByUsername(ctx context.Context, username string) (*auth.Use
 	return scanUser(row)
 }
 
-// VerifyCredentials is the single entry point for password login. It
-// returns the user on success, or a generic ErrInvalidCredentials on
-// any failure (so 401 responses don't leak "this username exists but
-// the password is wrong").
-func (db *DB) VerifyCredentials(ctx context.Context, username, password string) (*auth.User, error) {
+// Verify satisfies auth.CredentialVerifier using passwords stored as
+// bcrypt hashes in the users table. Returns a generic ErrInvalidCredentials
+// on any failure so 401 responses don't leak "this username exists but
+// the password is wrong".
+func (db *DB) Verify(ctx context.Context, username, password string) (*auth.User, error) {
 	// Fetch hash + full user in one query — avoid round-trips.
 	row := db.QueryRowContext(ctx,
 		fmt.Sprintf(`SELECT password_hash, %s FROM users WHERE username = ?`, userColumns),
@@ -115,27 +114,38 @@ func (db *DB) VerifyCredentials(ctx context.Context, username, password string) 
 // admin during development.
 type CreateUserArgs struct {
 	Username     string
-	Password     string
+	Password     string // empty when linking a PAM-authenticated Linux account
 	UnixUsername string
 	UnixUID      int
 	HomePath     string
 	StaxvDir     string
 	IsAdmin      bool
+	Adopted      bool // true when the Linux account pre-existed (we didn't create it)
 }
 
 // CreateUser inserts a users row and returns the inserted user.
 // Returns a wrapped error if username is already taken.
+//
+// When a.Password is empty, password_hash is stored as an empty string
+// — intended for PAM-backed users where the password lives in
+// /etc/shadow, not here. Switching auth backends later means those rows
+// can't log in under the other backend (no password to bcrypt-check,
+// no Linux account for pam_unix to find). Admin re-link required.
 func (db *DB) CreateUser(ctx context.Context, a CreateUserArgs) (*auth.User, error) {
-	hash, err := auth.HashPassword(a.Password)
-	if err != nil {
-		return nil, fmt.Errorf("hash password: %w", err)
+	var hash string
+	if a.Password != "" {
+		h, err := auth.HashPassword(a.Password)
+		if err != nil {
+			return nil, fmt.Errorf("hash password: %w", err)
+		}
+		hash = h
 	}
 	res, err := db.ExecContext(ctx, `
 		INSERT INTO users (
-			username, password_hash, unix_username, unix_uid,
+			username, password_hash, unix_username, unix_uid, adopted,
 			home_path, staxv_dir, is_admin, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, a.Username, hash, a.UnixUsername, a.UnixUID,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, a.Username, hash, a.UnixUsername, a.UnixUID, boolToInt(a.Adopted),
 		a.HomePath, a.StaxvDir, boolToInt(a.IsAdmin), time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("insert user: %w", err)

@@ -4,7 +4,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -12,28 +11,22 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/zeshaq/staxv-hypervisor/internal/db"
 	"github.com/zeshaq/staxv-hypervisor/pkg/auth"
 )
 
-// CredentialStore is the subset of DB ops the auth handlers need.
-// Kept as an interface so tests (and future LDAP/OIDC backends) can
-// substitute without touching the HTTP layer.
-type CredentialStore interface {
-	VerifyCredentials(ctx context.Context, username, password string) (*auth.User, error)
-}
-
-// AuthHandler wires login/logout/me.
+// AuthHandler wires login/logout/me. It depends on auth.CredentialVerifier
+// (an interface), so the concrete backend — DB bcrypt, PAM, LDAP/OIDC
+// later — is chosen in main.go and swapped without touching this file.
 type AuthHandler struct {
-	store  CredentialStore
-	signer *auth.Signer
-	secure bool // set cookie Secure=true when serving behind TLS
+	verifier auth.CredentialVerifier
+	signer   *auth.Signer
+	secure   bool // set cookie Secure=true when serving behind TLS
 }
 
 // NewAuthHandler constructs the handler. secure=true in prod/staging
 // (behind TLS), false in local dev (plain HTTP).
-func NewAuthHandler(store CredentialStore, signer *auth.Signer, secure bool) *AuthHandler {
-	return &AuthHandler{store: store, signer: signer, secure: secure}
+func NewAuthHandler(verifier auth.CredentialVerifier, signer *auth.Signer, secure bool) *AuthHandler {
+	return &AuthHandler{verifier: verifier, signer: signer, secure: secure}
 }
 
 // Mount attaches /api/auth/{login,logout,me} to r. `me` is wrapped in
@@ -72,11 +65,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := h.store.VerifyCredentials(r.Context(), req.Username, req.Password)
+	u, err := h.verifier.Verify(r.Context(), req.Username, req.Password)
 	if err != nil {
-		// Same status + message for all failure modes (see db.ErrInvalidCredentials).
-		if !errors.Is(err, db.ErrInvalidCredentials) {
-			slog.Error("login: unexpected DB error", "err", err, "username", req.Username)
+		// Any non-ErrInvalidCredentials error is a backend fault (DB
+		// down, PAM broken, etc.) — log it but keep the response opaque.
+		if !errors.Is(err, auth.ErrInvalidCredentials) {
+			slog.Error("login: unexpected verifier error", "err", err, "username", req.Username)
 		}
 		writeError(w, "invalid credentials", http.StatusUnauthorized)
 		return
