@@ -18,6 +18,7 @@ import (
 type LibvirtClient interface {
 	ListDomains() ([]lvpkg.DomainSummary, error)
 	GetDomainInfo(uuid string) (lvpkg.DomainSummary, error)
+	GetDomainDetail(uuid string) (*lvpkg.DomainDetail, error)
 	StartDomain(uuid string) error
 	ShutdownDomain(uuid string) error
 	ForceStopDomain(uuid string) error
@@ -61,6 +62,7 @@ func (h *VMHandler) Mount(r chi.Router, authMW func(http.Handler) http.Handler) 
 	r.Route("/api/vms", func(r chi.Router) {
 		r.Use(authMW)
 		r.Get("/", h.List)
+		r.Get("/{uuid}", h.Get)
 		r.Post("/", h.Create)
 		// Power ops — owner or admin. Not gated by locked flag;
 		// "locked" protects delete, not power cycling.
@@ -218,6 +220,81 @@ func (h *VMHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, out)
+}
+
+// vmDetailResponse is the wire shape for GET /api/vms/{uuid}. It
+// combines libvirt's DomainDetail (specs, disks, NICs, graphics) with
+// staxv's ownership state (owner_id, locked, adopted). The frontend
+// detail page consumes this as a single source of truth.
+type vmDetailResponse struct {
+	*lvpkg.DomainDetail
+	Locked  bool   `json:"locked"`
+	OwnerID *int64 `json:"owner_id,omitempty"`
+	Adopted bool   `json:"adopted,omitempty"` // true = libvirt-visible but no staxv ownership row
+}
+
+// Get returns one VM's full detail. Same visibility rules as List:
+// regular users see only VMs they own; admins see everything, with an
+// `adopted=true` flag on libvirt VMs staxv hasn't claimed yet.
+//
+// Error mapping:
+//   - Unknown UUID (or owned-by-someone-else, regular user) → 404.
+//     Non-admins never distinguish "doesn't exist" from "not yours" —
+//     matches the List+requireVMAccess pattern.
+//   - libvirt unreachable → 503.
+func (h *VMHandler) Get(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromCtx(r.Context())
+	if u == nil {
+		writeError(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+	uuid := chi.URLParam(r, "uuid")
+
+	own, err := h.requireVMAccess(r.Context(), u, uuid)
+	if err != nil {
+		// Same mapping as writeActionResult — ErrNotFound → 404, other
+		// errors → 500 via writeActionResult. Inline the 404 path since
+		// writeActionResult writes 204 on nil which we don't want here.
+		if errors.Is(err, db.ErrNotFound) {
+			writeError(w, "not found", http.StatusNotFound)
+			return
+		}
+		slog.Error("vms get: access check", "err", err, "uuid", uuid)
+		writeError(w, "lookup failed", http.StatusInternalServerError)
+		return
+	}
+
+	detail, err := h.libvirt.GetDomainDetail(uuid)
+	if err != nil {
+		if errors.Is(err, lvpkg.ErrDomainNotFound) {
+			// Ownership row existed (requireVMAccess returned own != nil)
+			// but libvirt doesn't know this UUID — admin likely deleted
+			// it via virsh out-of-band. Drop the orphan row and 404 to
+			// match list behaviour.
+			if own != nil {
+				_ = h.store.ReleaseVM(r.Context(), uuid)
+			}
+			writeError(w, "not found", http.StatusNotFound)
+			return
+		}
+		slog.Error("vms get: libvirt", "err", err, "uuid", uuid)
+		writeError(w, "libvirt unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	resp := vmDetailResponse{DomainDetail: detail}
+	switch {
+	case own != nil:
+		resp.Locked = own.Locked
+		ownerID := own.OwnerID
+		resp.OwnerID = &ownerID
+	default:
+		// Admin viewing an unclaimed libvirt VM — surface the adopted
+		// flag so the UI can offer a Claim button identical to the
+		// list page's behaviour.
+		resp.Adopted = true
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // -----------------------------------------------------------------------

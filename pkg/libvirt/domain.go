@@ -23,6 +23,54 @@ type DomainSummary struct {
 	MemoryMB  uint64 `json:"memory_mb"`   // current memory, in MiB (libvirt reports KiB)
 }
 
+// DomainDetail is the rich projection for the /api/vms/{uuid} endpoint
+// and VMDetail.jsx. Parsed from domain XML + DomainGetInfo every
+// request — no caching. Cost is negligible; libvirt's XML is already
+// in memory.
+type DomainDetail struct {
+	DomainSummary
+	MaxMemoryMB uint64       `json:"max_memory_mb"` // ballooning ceiling, from DomainGetInfo's maxMem
+	OSType      string       `json:"os_type"`       // "hvm" normally
+	Arch        string       `json:"arch,omitempty"`
+	Machine     string       `json:"machine,omitempty"` // "pc-q35-*", "pc-i440fx-*"
+	BootOrder   []string     `json:"boot_order,omitempty"`
+	Disks       []DomainDisk `json:"disks"`
+	NICs        []DomainNIC  `json:"nics"`
+	Graphics    []DomainGraphic `json:"graphics,omitempty"`
+}
+
+// DomainDisk is one <disk> block from the XML, projected for the UI.
+// Device="cdrom" with empty Source is an empty CDROM slot; the UI
+// surfaces that as "no media" so the admin can Attach ISO.
+type DomainDisk struct {
+	Target   string `json:"target"`             // "vda", "hda"
+	Device   string `json:"device"`             // "disk" | "cdrom"
+	Bus      string `json:"bus,omitempty"`      // "virtio" | "sata" | "scsi"
+	Source   string `json:"source,omitempty"`   // file path (file-backed) or dev path (block)
+	ReadOnly bool   `json:"read_only"`
+	BootOrder int   `json:"boot_order,omitempty"` // from per-disk <boot order/>; 0 = unset
+}
+
+// DomainNIC is one <interface> block. Source's meaning depends on
+// Type — we project the meaningful one into a single string so the
+// UI can render a single column.
+type DomainNIC struct {
+	MAC    string `json:"mac"`
+	Type   string `json:"type"`             // "network" | "bridge" | "direct" | …
+	Source string `json:"source,omitempty"` // the network name, bridge name, or host dev
+	Model  string `json:"model,omitempty"`  // "virtio", "e1000", …
+	Target string `json:"target,omitempty"` // "vnet0" on host (only meaningful when running)
+}
+
+// DomainGraphic is one <graphics> entry (VNC/SPICE/RDP). Detail page
+// surfaces type + port so admin knows if "launch console" will work.
+type DomainGraphic struct {
+	Type        string `json:"type"`
+	Port        string `json:"port,omitempty"`
+	Listen      string `json:"listen,omitempty"`
+	HasPassword bool   `json:"has_password"`
+}
+
 // stateNames maps libvirt's VIR_DOMAIN_STATE enum values to the
 // human-readable strings vm-manager's frontend expects. The space in
 // "shut off" is deliberate — that's how virsh(1) prints it.
@@ -212,6 +260,110 @@ func (c *Client) GetDomainInfo(uuidStr string) (DomainSummary, error) {
 		VCPUs:     nrVCPU,
 		MemoryMB:  memoryKiB / 1024,
 	}, nil
+}
+
+// GetDomainDetail returns the rich view used by the detail page:
+// DomainSummary fields + disks + NICs + OS info parsed from the
+// domain XML. One libvirt round-trip for XML, one for info, one for
+// state. Kept as a single call so the HTTP handler has nothing to
+// stitch.
+//
+// Returns ErrDomainNotFound on an unknown UUID.
+func (c *Client) GetDomainDetail(uuidStr string) (*DomainDetail, error) {
+	lv, err := c.libvirt()
+	if err != nil {
+		return nil, err
+	}
+	defer c.Unlock()
+
+	d, err := c.lookupByUUID(lv, uuidStr)
+	if err != nil {
+		return nil, err
+	}
+
+	stateRaw, _, err := lv.DomainGetState(d, 0)
+	if err != nil {
+		return nil, fmt.Errorf("libvirt: get state %s: %w", uuidStr, err)
+	}
+	_, maxKiB, memoryKiB, nrVCPU, _, err := lv.DomainGetInfo(d)
+	if err != nil {
+		return nil, fmt.Errorf("libvirt: get info %s: %w", uuidStr, err)
+	}
+	xmlStr, err := lv.DomainGetXMLDesc(d, 0)
+	if err != nil {
+		return nil, fmt.Errorf("libvirt: get xml %s: %w", uuidStr, err)
+	}
+	parsed, err := parseDomain(xmlStr)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &DomainDetail{
+		DomainSummary: DomainSummary{
+			UUID:      uuidToString(d.UUID),
+			Name:      d.Name,
+			State:     stateName(uint8(stateRaw)),
+			StateCode: int(stateRaw),
+			VCPUs:     nrVCPU,
+			MemoryMB:  memoryKiB / 1024,
+		},
+		MaxMemoryMB: maxKiB / 1024,
+		OSType:      parsed.OS.Type.Value,
+		Arch:        parsed.OS.Type.Arch,
+		Machine:     parsed.OS.Type.Machine,
+		BootOrder:   parsed.bootOrderList(),
+		Disks:       make([]DomainDisk, 0, len(parsed.Devices.Disks)),
+		NICs:        make([]DomainNIC, 0, len(parsed.Devices.Interfaces)),
+		Graphics:    make([]DomainGraphic, 0, len(parsed.Devices.Graphics)),
+	}
+	for _, dk := range parsed.Devices.Disks {
+		// Source: prefer file-backed path; fall back to dev for
+		// block-backed. Empty is legitimate (empty CDROM slot).
+		src := dk.Source.File
+		if src == "" {
+			src = dk.Source.Dev
+		}
+		var bootOrder int
+		if dk.Boot != nil {
+			bootOrder = dk.Boot.Order
+		}
+		out.Disks = append(out.Disks, DomainDisk{
+			Target:    dk.Target.Dev,
+			Device:    dk.Device,
+			Bus:       dk.Target.Bus,
+			Source:    src,
+			ReadOnly:  dk.ReadOnly != nil,
+			BootOrder: bootOrder,
+		})
+	}
+	for _, n := range parsed.Devices.Interfaces {
+		// Project the type-appropriate source into one string.
+		var src string
+		switch n.Type {
+		case "network":
+			src = n.Source.Network
+		case "bridge":
+			src = n.Source.Bridge
+		case "direct":
+			src = n.Source.Dev
+		}
+		out.NICs = append(out.NICs, DomainNIC{
+			MAC:    n.MAC.Address,
+			Type:   n.Type,
+			Source: src,
+			Model:  n.Model.Type,
+			Target: n.Target.Dev,
+		})
+	}
+	for _, g := range parsed.Devices.Graphics {
+		out.Graphics = append(out.Graphics, DomainGraphic{
+			Type:        g.Type,
+			Port:        g.Port,
+			Listen:      g.Listen,
+			HasPassword: g.Password != "",
+		})
+	}
+	return out, nil
 }
 
 // StartDomain boots a defined-but-stopped VM. libvirt error if the VM
