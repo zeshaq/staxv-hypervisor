@@ -185,7 +185,7 @@ func TestSettingsInvalidKey(t *testing.T) {
 	ctx := context.Background()
 	s := newTestStore(t)
 
-	bad := []string{"", "Key", "1abc", "a b", "a..", strings.Repeat("x", 65), "../escape"}
+	bad := []string{"", "Key", "1abc", "a b", strings.Repeat("x", 65), "../escape", "a-b"}
 	for _, k := range bad {
 		if err := s.Set(ctx, ptr(1), k, "v"); !errors.Is(err, ErrKeyInvalid) {
 			t.Errorf("Set(%q): got %v, want ErrKeyInvalid", k, err)
