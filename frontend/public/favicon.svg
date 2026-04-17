@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="b" x1="30%" y1="100%" x2="70%" y2="0%">
+      <stop offset="0%"   stop-color="#03081a"/>
+      <stop offset="100%" stop-color="#0f2466"/>
+    </linearGradient>
+    <linearGradient id="a" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#1748c8"/>
+      <stop offset="100%" stop-color="#7dd3fc"/>
+    </linearGradient>
+    <linearGradient id="p" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#3730a3"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+    <radialGradient id="gl" cx="70%" cy="22%" r="55%">
+      <stop offset="0%"   stop-color="#bfdbfe" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#bfdbfe" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="r" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   stop-color="#a5d8ff" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="c">
+      <path d="M16 2.5C20 2.3,25 4.7,27.2 8.8C29.1,12.4,29.2,17,27.5,20.8C25.7,24.9,22,27.6,18,28.5C17.3,28.7,14.7,28.7,14,28.5C10,27.6,6.3,24.9,4.5,20.8C2.8,17,2.9,12.4,4.8,8.8C7,4.7,12,2.3,16,2.5Z"/>
+    </clipPath>
+  </defs>
+  <path d="M16 2.5C20 2.3,25 4.7,27.2 8.8C29.1,12.4,29.2,17,27.5,20.8C25.7,24.9,22,27.6,18,28.5C17.3,28.7,14.7,28.7,14,28.5C10,27.6,6.3,24.9,4.5,20.8C2.8,17,2.9,12.4,4.8,8.8C7,4.7,12,2.3,16,2.5Z" fill="url(#b)"/>
+  <path d="M16 2.5C20 2.3,25 4.7,27.2 8.8C29.1,12.4,29.2,17,27.5,20.8C23,24,19,26,16 17.8Z" fill="url(#a)" clip-path="url(#c)" opacity="0.92"/>
+  <path d="M16 2.5C12 2.3,7 4.7,4.8 8.8C2.9,12.4,2.8,17,4.5,20.8C8,24,13,26,16 17.8Z" fill="url(#p)" clip-path="url(#c)" opacity="0.78"/>
+  <path d="M16 2.5C20 2.3,25 4.7,27.2 8.8C29.1,12.4,29.2,17,27.5,20.8C25.7,24.9,22,27.6,18,28.5C17.3,28.7,14.7,28.7,14,28.5C10,27.6,6.3,24.9,4.5,20.8C2.8,17,2.9,12.4,4.8,8.8C7,4.7,12,2.3,16,2.5Z" fill="url(#gl)" clip-path="url(#c)"/>
+  <line x1="16" y1="3" x2="16" y2="17.8" stroke="url(#r)" stroke-width="0.8" stroke-linecap="round"/>
+</svg>

@@ -33,6 +33,7 @@ import (
 	"github.com/zeshaq/staxv-hypervisor/internal/config"
 	"github.com/zeshaq/staxv-hypervisor/internal/db"
 	"github.com/zeshaq/staxv-hypervisor/internal/handlers"
+	"github.com/zeshaq/staxv-hypervisor/internal/webui"
 	"github.com/zeshaq/staxv-hypervisor/pkg/auth"
 	"github.com/zeshaq/staxv-hypervisor/pkg/secrets"
 	"golang.org/x/term"
@@ -156,9 +157,8 @@ func cmdServe(args []string) {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// Public
+	// Public API
 	r.Get("/healthz", healthzHandler)
-	r.Get("/", rootHandler)
 
 	// Auth — login/logout public, /me gated by authMW (attached inside Mount)
 	authH := handlers.NewAuthHandler(store, signer, cfg.Server.Secure)
@@ -167,6 +167,15 @@ func cmdServe(args []string) {
 	// Settings — all routes gated.
 	settingsH := handlers.NewSettingsHandler(settingsStore)
 	settingsH.Mount(r, authMW)
+
+	// Host info — authenticated users only.
+	hostH := handlers.NewHostHandler()
+	hostH.Mount(r, authMW)
+
+	// Web UI — mounted LAST so it catches everything unmatched above.
+	// Serves the embedded React app with SPA fallback (unknown paths →
+	// index.html so React Router handles deep links).
+	r.Handle("/*", webui.Handler())
 
 	srv := &http.Server{
 		Addr:              cfg.Server.Addr,
@@ -204,18 +213,7 @@ func healthzHandler(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok","version":"` + version + `"}` + "\n"))
 }
 
-func rootHandler(w http.ResponseWriter, _ *http.Request) {
-	_, _ = w.Write([]byte("staxv-hypervisor " + version + "\n\n" +
-		"Try:\n" +
-		"  GET    /healthz\n" +
-		"  POST   /api/auth/login\n" +
-		"  GET    /api/auth/me          (requires cookie)\n" +
-		"  POST   /api/auth/logout\n" +
-		"  GET    /api/settings\n" +
-		"  GET    /api/settings/{key}\n" +
-		"  PUT    /api/settings/{key}   {\"value\":\"...\"}\n" +
-		"  DELETE /api/settings/{key}\n"))
-}
+// rootHandler removed — internal/webui now serves / (React SPA).
 
 // -----------------------------------------------------------------------
 // useradd (STUB — DB only)
