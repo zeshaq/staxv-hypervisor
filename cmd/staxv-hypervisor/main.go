@@ -35,6 +35,7 @@ import (
 	"github.com/zeshaq/staxv-hypervisor/internal/handlers"
 	"github.com/zeshaq/staxv-hypervisor/internal/webui"
 	"github.com/zeshaq/staxv-hypervisor/pkg/auth"
+	lvpkg "github.com/zeshaq/staxv-hypervisor/pkg/libvirt"
 	"github.com/zeshaq/staxv-hypervisor/pkg/pamauth"
 	"github.com/zeshaq/staxv-hypervisor/pkg/secrets"
 	"golang.org/x/term"
@@ -191,6 +192,21 @@ func cmdServe(args []string) {
 	// Host dashboard — uptime, CPU, mem, disk, net, top processes.
 	dashH := handlers.NewDashboardHandler()
 	dashH.Mount(r, authMW)
+
+	// libvirt client — single shared connection to qemu:///system.
+	// Fail-soft: if libvirt is down at startup, log the error and keep
+	// the HTTP server up. Auth, settings, host info, dashboard still
+	// work. /api/vms returns 503 until libvirt recovers (future:
+	// auto-reconnect with backoff).
+	lv, err := lvpkg.New(ctx, cfg.Libvirt.URI)
+	if err != nil {
+		slog.Error("libvirt connect failed — /api/vms will return 503", "err", err, "uri", cfg.Libvirt.URI)
+	} else {
+		defer lv.Close()
+		slog.Info("libvirt connected", "uri", cfg.Libvirt.URI)
+		vmH := handlers.NewVMHandler(lv, store)
+		vmH.Mount(r, authMW)
+	}
 
 	// Web UI — mounted LAST so it catches everything unmatched above.
 	// Serves the embedded React app with SPA fallback (unknown paths →

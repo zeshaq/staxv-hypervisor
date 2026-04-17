@@ -36,3 +36,8 @@ key_path = "./tmp/settings.key"
 # Ubuntu defaults — override only if libvirt runs as different user (RHEL etc.)
 qemu_user  = "libvirt-qemu"
 qemu_group = "kvm"
+
+[libvirt]
+# Local qemu:///system via the standard Ubuntu socket. For remote libvirt
+# (tcp+tls://), support pending — we'd need TLS client cert setup.
+uri = "unix:///var/run/libvirt/libvirt-sock"

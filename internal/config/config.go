@@ -48,6 +48,10 @@ type Config struct {
 		QemuUser  string `toml:"qemu_user"`  // default "libvirt-qemu" (Ubuntu)
 		QemuGroup string `toml:"qemu_group"` // default "kvm" (Ubuntu)
 	} `toml:"host"`
+
+	Libvirt struct {
+		URI string `toml:"uri"` // default unix:///var/run/libvirt/libvirt-sock
+	} `toml:"libvirt"`
 }
 
 // Load reads path and returns the parsed config with defaults filled in.
@@ -100,5 +104,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Host.QemuGroup == "" {
 		c.Host.QemuGroup = "kvm"
+	}
+	if c.Libvirt.URI == "" {
+		c.Libvirt.URI = "unix:///var/run/libvirt/libvirt-sock"
 	}
 }
