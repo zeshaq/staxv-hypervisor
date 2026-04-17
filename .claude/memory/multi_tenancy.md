@@ -3,6 +3,37 @@
 Every user owns their own VMs, clusters, files. No cross-user visibility
 except by admins. Baked in from scaffold, not retrofitted.
 
+## Authentication Backend (LOCKED 2026-04-17)
+
+`[auth] backend` in config selects how passwords are verified:
+
+- **`"db"`** (default) — bcrypt hash in `users.password_hash`. Self-contained,
+  no host dependencies. Use for bootstrap admin / when Linux accounts
+  aren't desired.
+- **`"pam"`** — shell out to `pamtester <service> <user> authenticate`
+  (password on stdin). Cgo-free. Users log in with their **Linux
+  password** from `/etc/shadow`. Requires:
+  - `apt install pamtester`
+  - `/etc/pam.d/staxv-hypervisor` (Ubuntu: just `@include common-auth` +
+    `@include common-account` — pulls pam_unix + pam_faillock +
+    pam_pwquality for free)
+  - Each staxv user **pre-linked** via `useradd --link-existing` so
+    there's a staxv row tying username → unix_username + UID + quotas +
+    is_admin. No auto-provisioning on first PAM success — that would
+    let every Linux account on the host into the web UI.
+
+**No per-user backend.** Global config only. YAGNI until a real
+hybrid use case appears; at that point add `users.auth_type` column.
+
+**Switching backends orphans users who don't fit the new mode**: a DB
+user with no Linux account can't PAM-auth; a link-existing user with
+empty `password_hash` can't DB-auth. Admin re-link required when
+switching — deliberate and rare.
+
+The HTTP layer is backend-agnostic: handlers depend on
+`pkg/auth.CredentialVerifier`. DB and PAM both satisfy it. LDAP/OIDC
+can be added the same way later.
+
 ## User Identity Model — Linux Users (LOCKED 2026-04-17)
 
 Each staxv user is backed by a **real Linux/Unix account** on the host.
