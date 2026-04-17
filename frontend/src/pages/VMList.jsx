@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Play, Square, Trash2, Eye, PlusCircle, RefreshCw, Monitor, Lock, Unlock } from 'lucide-react'
+import { Play, Square, Trash2, Eye, PlusCircle, RefreshCw, Monitor, Lock, Unlock, UserPlus } from 'lucide-react'
 import api from '../api'
 
 function StateBadge({ state }) {
@@ -73,6 +73,18 @@ export default function VMList() {
     setLoading_(uuid, true)
     try { await api.post(`/vms/${uuid}/unlock`); fetchVMs() }
     catch(e) { alert(e.response?.data?.error || 'Error') }
+    setLoading_(uuid, false)
+  }
+
+  // Admin-only: claim an adopted (unowned) libvirt VM into staxv's
+  // ownership model. Empty body = claim-for-self. Re-fetches the list
+  // so the row re-renders with owner_id / adopted cleared and the
+  // Claim button disappears.
+  const handleClaim = async (uuid, name) => {
+    if (!confirm(`Claim "${name}" for yourself?`)) return
+    setLoading_(uuid, true)
+    try { await api.post(`/vms/${uuid}/claim`, {}); fetchVMs() }
+    catch(e) { alert(e.response?.data?.error || 'Failed to claim') }
     setLoading_(uuid, false)
   }
 
@@ -190,6 +202,14 @@ export default function VMList() {
                           <Lock size={12} />
                         </span>
                       )}
+                      {vm.adopted && (
+                        <span
+                          title="Pre-existing libvirt VM with no staxv owner. Click Claim to assign ownership."
+                          className="px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide uppercase bg-amber-900/40 text-amber-300 border border-amber-700/50"
+                        >
+                          adopted
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="px-4 py-3"><StateBadge state={vm.state} /></td>
@@ -226,7 +246,18 @@ export default function VMList() {
                           <Monitor size={13} />
                         </a>
                       )}
-                      {vm.locked ? (
+                      {vm.adopted ? (
+                        // Adopted VMs have no ownership row — lock would 409.
+                        // Offer Claim instead; lock becomes available once claimed.
+                        <button
+                          onClick={() => handleClaim(vm.uuid, vm.name)}
+                          disabled={actionLoading[vm.uuid]}
+                          title="Claim this VM (assign ownership to yourself)"
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-amber-900/60 hover:bg-amber-800 text-amber-300 text-xs font-medium transition-colors disabled:opacity-50"
+                        >
+                          <UserPlus size={13} /> Claim
+                        </button>
+                      ) : vm.locked ? (
                         <button
                           onClick={() => handleUnlock(vm.uuid)}
                           disabled={actionLoading[vm.uuid]}
