@@ -13,6 +13,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -287,15 +288,30 @@ func resolveUID(s string) (int, error) {
 	return strconv.Atoi(u.Uid)
 }
 
+// promptPassword reads a password from stdin. If stdin is a terminal,
+// reads it invisibly via term.ReadPassword. If stdin is a pipe (scripts,
+// CI), reads a single line of plaintext — no prompt printed to avoid
+// polluting captured stdout.
 func promptPassword() string {
-	fmt.Fprint(os.Stderr, "password: ")
-	b, err := term.ReadPassword(int(syscall.Stdin))
-	fmt.Fprintln(os.Stderr)
-	if err != nil {
+	fd := int(os.Stdin.Fd())
+	var raw []byte
+	var err error
+	if term.IsTerminal(fd) {
+		fmt.Fprint(os.Stderr, "password: ")
+		raw, err = term.ReadPassword(fd)
+		fmt.Fprintln(os.Stderr)
+	} else {
+		// Non-TTY: read one line as-is. Supports `echo pw | staxv-hypervisor useradd ...`
+		reader := bufio.NewReader(os.Stdin)
+		var line string
+		line, err = reader.ReadString('\n')
+		raw = []byte(strings.TrimRight(line, "\r\n"))
+	}
+	if err != nil && err.Error() != "EOF" {
 		fmt.Fprintf(os.Stderr, "read password: %v\n", err)
 		os.Exit(1)
 	}
-	pw := strings.TrimSpace(string(b))
+	pw := strings.TrimSpace(string(raw))
 	if pw == "" {
 		fmt.Fprintln(os.Stderr, "password cannot be empty")
 		os.Exit(2)
