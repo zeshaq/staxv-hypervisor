@@ -6,7 +6,7 @@ tmp_dir = "tmp"
 
 [build]
   cmd          = "go build -ldflags=\"-X main.version=dev-air\" -o ./tmp/staxv-hypervisor ./cmd/staxv-hypervisor"
-  bin          = "./tmp/staxv-hypervisor"
+  entrypoint   = "./tmp/staxv-hypervisor"   # air >=1.65 renamed `bin` to `entrypoint`
   args_bin     = ["serve", "--config", "./dev-config.toml", "--addr", ":5001"]
   delay        = 500                # ms debounce for rapid saves
   kill_delay   = "2s"               # graceful-shutdown window before SIGKILL
