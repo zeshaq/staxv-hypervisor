@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 // uses. Kept as an interface so tests can substitute a fake.
 type LibvirtClient interface {
 	ListDomains() ([]lvpkg.DomainSummary, error)
+	GetDomainInfo(uuid string) (lvpkg.DomainSummary, error)
 	StartDomain(uuid string) error
 	ShutdownDomain(uuid string) error
 	ForceStopDomain(uuid string) error
@@ -28,6 +30,8 @@ type VMOwnershipStore interface {
 	ListAllVMOwnerships(ctx context.Context) ([]db.VMOwnership, error)
 	GetVMOwnership(ctx context.Context, uuid string) (*db.VMOwnership, error)
 	SetVMLocked(ctx context.Context, uuid string, locked bool) error
+	ClaimVM(ctx context.Context, uuid, name string, ownerID int64) (*db.VMOwnership, error)
+	ReleaseVM(ctx context.Context, uuid string) error
 }
 
 // VMHandler serves /api/vms. Read + power ops + lock/unlock.
@@ -56,6 +60,10 @@ func (h *VMHandler) Mount(r chi.Router, authMW func(http.Handler) http.Handler) 
 		// ownership row → no row to flip). Admin claims first.
 		r.Post("/{uuid}/lock", h.Lock)
 		r.Post("/{uuid}/unlock", h.Unlock)
+		// Claim / Release — admin-only. Used to adopt a pre-existing
+		// libvirt VM into staxv's ownership model, or to let one go.
+		r.Post("/{uuid}/claim", h.Claim)
+		r.Post("/{uuid}/release", h.Release)
 	})
 }
 
@@ -277,4 +285,100 @@ func lockAction(locked bool) string {
 		return "lock"
 	}
 	return "unlock"
+}
+
+// -----------------------------------------------------------------------
+// Claim / Release — admin-only adoption of libvirt domains
+// -----------------------------------------------------------------------
+
+type claimRequest struct {
+	// OwnerID: whom to assign. Omit / null → claim for the caller.
+	OwnerID *int64 `json:"owner_id,omitempty"`
+}
+
+// Claim writes an ownership row for a libvirt domain that staxv isn't
+// tracking yet (adopted=true in List output). Admin-only — a random
+// user auto-claiming would leak the host's entire VM table to whoever
+// logs in first.
+func (h *VMHandler) Claim(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromCtx(r.Context())
+	if !u.IsAdmin {
+		writeError(w, "admin only", http.StatusForbidden)
+		return
+	}
+	uuid := chi.URLParam(r, "uuid")
+
+	// Parse body (optional). Empty body = claim for self.
+	req := claimRequest{}
+	if r.ContentLength > 0 {
+		// Tolerate the occasional trailing newline or empty object.
+		dec := json.NewDecoder(r.Body)
+		if err := dec.Decode(&req); err != nil && err.Error() != "EOF" {
+			writeError(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+	ownerID := u.ID
+	if req.OwnerID != nil {
+		ownerID = *req.OwnerID
+	}
+
+	// Reject if already claimed. Re-assignment = Release then Claim.
+	if existing, err := h.store.GetVMOwnership(r.Context(), uuid); err == nil && existing != nil {
+		writeError(w, "VM already has owner — release first", http.StatusConflict)
+		return
+	} else if err != nil && !errors.Is(err, db.ErrNotFound) {
+		slog.Error("claim: db lookup", "err", err, "uuid", uuid)
+		writeError(w, "db error", http.StatusInternalServerError)
+		return
+	}
+
+	// Confirm the VM exists in libvirt, and grab its name for the new
+	// ownership row (we store name as a denormalized cache so list /
+	// search doesn't need to re-hit libvirt for every row).
+	info, err := h.libvirt.GetDomainInfo(uuid)
+	if err != nil {
+		if errors.Is(err, lvpkg.ErrDomainNotFound) {
+			writeError(w, "not found", http.StatusNotFound)
+			return
+		}
+		slog.Error("claim: libvirt lookup", "err", err, "uuid", uuid)
+		writeError(w, "libvirt unavailable", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Insert. SQLite FK will fail if ownerID doesn't reference a real
+	// user — surface as 400 so the admin sees a clean message.
+	own, err := h.store.ClaimVM(r.Context(), uuid, info.Name, ownerID)
+	if err != nil {
+		slog.Warn("claim: insert failed", "err", err, "uuid", uuid, "owner_id", ownerID)
+		writeError(w, "claim failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("vm claimed",
+		"uuid", uuid, "name", info.Name, "owner_id", ownerID,
+		"claimed_by", u.ID, "is_admin", u.IsAdmin,
+	)
+	writeJSON(w, http.StatusOK, own)
+}
+
+// Release removes the ownership row, returning the VM to adopted/
+// unclaimed status. Admin-only. Does NOT touch libvirt — the VM keeps
+// running; only staxv's view of ownership changes.
+func (h *VMHandler) Release(w http.ResponseWriter, r *http.Request) {
+	u := auth.UserFromCtx(r.Context())
+	if !u.IsAdmin {
+		writeError(w, "admin only", http.StatusForbidden)
+		return
+	}
+	uuid := chi.URLParam(r, "uuid")
+
+	if err := h.store.ReleaseVM(r.Context(), uuid); err != nil {
+		slog.Error("release: db", "err", err, "uuid", uuid)
+		writeError(w, "release failed", http.StatusInternalServerError)
+		return
+	}
+	slog.Info("vm released", "uuid", uuid, "released_by", u.ID)
+	w.WriteHeader(http.StatusNoContent)
 }

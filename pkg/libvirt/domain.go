@@ -140,6 +140,38 @@ func (c *Client) lookupByUUID(lv *golibvirt.Libvirt, uuidStr string) (golibvirt.
 	return d, nil
 }
 
+// GetDomainInfo returns a single domain's summary, or ErrDomainNotFound
+// if the UUID doesn't match any libvirt domain. Useful for per-VM
+// operations (claim, detail page) where a full ListDomains would be
+// wasteful.
+func (c *Client) GetDomainInfo(uuidStr string) (DomainSummary, error) {
+	lv, err := c.libvirt()
+	if err != nil {
+		return DomainSummary{}, err
+	}
+	defer c.Unlock()
+	d, err := c.lookupByUUID(lv, uuidStr)
+	if err != nil {
+		return DomainSummary{}, err
+	}
+	stateRaw, _, err := lv.DomainGetState(d, 0)
+	if err != nil {
+		return DomainSummary{}, fmt.Errorf("libvirt: get state %s: %w", uuidStr, err)
+	}
+	_, _, memoryKiB, nrVCPU, _, err := lv.DomainGetInfo(d)
+	if err != nil {
+		return DomainSummary{}, fmt.Errorf("libvirt: get info %s: %w", uuidStr, err)
+	}
+	return DomainSummary{
+		UUID:      uuidToString(d.UUID),
+		Name:      d.Name,
+		State:     stateName(uint8(stateRaw)),
+		StateCode: int(stateRaw),
+		VCPUs:     nrVCPU,
+		MemoryMB:  memoryKiB / 1024,
+	}, nil
+}
+
 // StartDomain boots a defined-but-stopped VM. libvirt error if the VM
 // is already running.
 func (c *Client) StartDomain(uuidStr string) error {
