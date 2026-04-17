@@ -38,10 +38,11 @@ export default function Login({ onLogin }) {
           {/* Logo */}
           <div className="flex flex-col items-center mb-8">
             <div className="mb-4">
-              <img src="/logo.svg" alt="Hypercloud" className="w-20 h-20 drop-shadow-lg" />
+              <img src="/logo.svg" alt="StaxV" className="w-20 h-20 drop-shadow-lg" />
             </div>
-            <h1 className="text-2xl font-bold text-sky-400">Hypercloud</h1>
-            <p className="text-slate-400 text-sm mt-1">Sign in to your cloud dashboard</p>
+            <h1 className="text-3xl font-bold text-sky-400 leading-none">StaxV</h1>
+            <p className="text-slate-400 text-xs font-semibold tracking-[0.25em] uppercase mt-1">Hypervisor</p>
+            <p className="text-slate-400 text-sm mt-3">Sign in to your dashboard</p>
           </div>
 
           {error && (

@@ -157,7 +157,7 @@ export default function Layout({ children, username, onLogout }) {
     if (p === '/settings')            return 'System Settings'
     if (p === '/physical-servers')    return 'Physical Servers'
     if (p.startsWith('/physical-servers/')) return 'Server Detail'
-    return 'Hypercloud'
+    return 'StaxV Hypervisor'
   }
 
   return (
@@ -167,8 +167,11 @@ export default function Layout({ children, username, onLogout }) {
         {/* Logo */}
         <div className="px-6 py-5 border-b border-navy-400">
           <div className="flex items-center gap-3 mb-2">
-            <img src="/logo.svg" alt="Hypercloud" className="w-8 h-8" />
-            <span className="text-sky-400 font-bold text-lg tracking-tight">Hypercloud</span>
+            <img src="/logo.svg" alt="StaxV" className="w-8 h-8" />
+            <div className="flex flex-col leading-none">
+              <span className="text-sky-400 font-bold text-lg tracking-tight">StaxV</span>
+              <span className="text-slate-400 text-[10px] font-semibold tracking-widest uppercase mt-0.5">Hypervisor</span>
+            </div>
           </div>
           {hostname && (
             <div

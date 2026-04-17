@@ -37,7 +37,7 @@
       <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
     </linearGradient>
 
-    <!-- HC text gradient — bright top, solid blue bottom -->
+    <!-- SV text gradient — bright top, solid blue bottom -->
     <linearGradient id="gText" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%"   stop-color="#ffffff" stop-opacity="1"/>
       <stop offset="45%"  stop-color="#e0f2fe" stop-opacity="0.97"/>
@@ -92,7 +92,7 @@
   <line x1="100" y1="17" x2="100" y2="108"
     stroke="url(#gRidge)" stroke-width="1.4" stroke-linecap="round"/>
 
-  <!-- ── HC monogram ───────────────────────────────────────────────────── -->
+  <!-- ── SV monogram ───────────────────────────────────────────────────── -->
   <text
     x="100" y="121"
     font-family="'Arial Black','Helvetica Neue',Arial,sans-serif"
@@ -101,6 +101,6 @@
     letter-spacing="-3"
     text-anchor="middle"
     fill="url(#gText)"
-    filter="url(#fTextGlow)">HC</text>
+    filter="url(#fTextGlow)">SV</text>
 
 </svg>
